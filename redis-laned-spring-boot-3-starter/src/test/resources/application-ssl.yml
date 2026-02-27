@@ -1,0 +1,23 @@
+# SSL/TLS test configuration with mutual TLS
+# (C)2026 Macstab GmbH
+
+spring:
+  data:
+    redis:
+      ssl:
+        enabled: true
+        bundle: test-mtls
+        
+      connection:
+        strategy: LANED
+        lanes: 4
+        
+  ssl:
+    bundle:
+      pem:
+        test-mtls:
+          keystore:
+            certificate: classpath:certs/client.crt
+            private-key: classpath:certs/client.key
+          truststore:
+            certificate: classpath:certs/ca.crt

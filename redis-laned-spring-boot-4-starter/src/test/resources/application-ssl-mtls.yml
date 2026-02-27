@@ -1,0 +1,18 @@
+spring:
+  ssl:
+    bundle:
+      pem:
+        test-mtls:
+          keystore:
+            certificate: file:src/test/resources/certs/client.crt
+            private-key: file:src/test/resources/certs/client.key
+          truststore:
+            certificate: file:src/test/resources/certs/ca.crt
+  data:
+    redis:
+      ssl:
+        enabled: true
+        bundle: test-mtls
+      connection:
+        strategy: LANED
+        lanes: 4
