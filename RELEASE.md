@@ -2,11 +2,11 @@
 
 ## Publishing Overview and Steps
 
-| Target              | Trigger                     | Version          | Artifact  |
-|---------------------|-----------------------------|------------------|-----------|
-| **GitHub Packages** | Push to `main` or ``develop | `X.Y.Z-SNAPSHOT` | Automatic |
-| **GitHub Packages** | Push tag `vX.Y.Z`           | `X.Y.Z`          | Automatic |
-| **Maven Central**   | Manual (checkout tag)       | `X.Y.Z`          | Manual    |
+| Target              | Trigger               | Version          | Artifact  |
+|---------------------|-----------------------|------------------|-----------|
+| **GitHub Packages** | Push to `develop`     | `X.Y.Z-SNAPSHOT` | Automatic |
+| **GitHub Packages** | Push tag `X.Y.Z`      | `X.Y.Z`          | Automatic |
+| **Maven Central**   | Manual (checkout tag) | `X.Y.Z`          | Manual    |
 
 ---
 
@@ -34,31 +34,35 @@ git push origin main
 </dependency>
 ```
 
+**When to use a SNAPSHOT:**
+- When you want to test unreleased features
+- When you want to use the latest changes before a release
+- When you want to share your work with others for feedback
+
 ---
 
 ## Release Workflow
 
-### Step 1: Create & Push Tag
-
-```bash
-# Ensure you're on main with latest changes
-git checkout main
-git pull
-
-# Create release tag
-git tag v1.0.0
-
-# Push tag to GitHub
-git push origin v1.0.0
-```
+### Step 1: Create Pull Request (PR) from `develop` to `main`
 
 **What happens automatically:**
-1. GitHub Actions runs `.github/workflows/release.yml`
-2. Extracts version from tag (`v1.0.0` → `1.0.0`)
-3. Updates `build.gradle.kts` (removes SNAPSHOT)
-4. Semantic-release generates `CHANGELOG.md`
-5. Creates GitHub Release with release notes
-6. Publishes `1.0.0` to **GitHub Packages**
+1. GitHub Actions runs `.github/workflows/build.yml`
+2. Extracts version from tag (`1.0.0` → `1.0.0`)
+3GitHub Actions runs `.github/workflows/release-snapshot.yml`
+4Publishes `1.0.0` to **GitHub Packages**
+
+### Step 2: Merge Pull Request (PR) from `develop` to `main`
+
+**What happens automatically:**
+1. GitHub Actions runs `.github/workflows/build.yml`
+2. Validating the release GitHub Actions runs `.github/workflows/semantic-release.yml`
+3. Extracts version from tag (`v1.0.0` → `1.0.0`)
+4. Tag is created
+5. Updates `gradle.properties` (removes SNAPSHOT)
+6. GitHub Actions runs `.github/workflows/publish-release.yml`
+7. Semantic-release generates `CHANGELOG.md`
+8. Creates GitHub Release with release notes
+9. Publishes `1.0.0` to **GitHub Packages**
 
 **Result:**
 - ✅ GitHub Release created
@@ -69,7 +73,7 @@ git push origin v1.0.0
 
 ```bash
 # Checkout the release tag
-git checkout v1.0.0
+git checkout 1.0.0
 
 # Publish to Maven Central staging
 ./gradlew clean build publish
@@ -93,35 +97,20 @@ git checkout v1.0.0
 # Return to main
 git checkout main
 ```
-
-### Step 3: Bump Version for Next Development Cycle
-
-```bash
-# Edit build.gradle.kts
-# Change: version = "1.0.0-SNAPSHOT"
-# To:     version = "1.1.0-SNAPSHOT"
-
-git add build.gradle.kts
-git commit -m "chore: bump to 1.1.0-SNAPSHOT"
-git push
-```
-
-**Next push to `main` will publish `1.1.0-SNAPSHOT`.**
-
 ---
 
 ## Commit Message Format (Conventional Commits)
 
 Semantic-release analyzes commit messages to determine version bump:
 
-| Type | Version Bump | Example |
-|------|--------------|---------|
-| `feat:` | MINOR (1.0.0 → 1.1.0) | `feat: add cluster support` |
-| `fix:` | PATCH (1.0.0 → 1.0.1) | `fix: connection leak` |
-| `perf:` | PATCH | `perf: optimize lane selection` |
-| `docs:` | PATCH | `docs: update README` |
-| `feat!:` | MAJOR (1.0.0 → 2.0.0) | `feat!: remove deprecated API` |
-| `chore:` | NO RELEASE | `chore: update dependencies` |
+| Type     | Version Bump          | Example                         |
+|----------|-----------------------|---------------------------------|
+| `feat:`  | MINOR (1.0.0 → 1.1.0) | `feat: add cluster support`     |
+| `fix:`   | PATCH (1.0.0 → 1.0.1) | `fix: connection leak`          |
+| `perf:`  | PATCH (1.0.0 → 1.0.1) | `perf: optimize lane selection` |
+| `docs:`  | NONE                  | `docs: update README`           |
+| `feat!:` | MAJOR (1.0.0 → 2.0.0) | `feat!: remove deprecated API`  |
+| `chore:` | PATCH (1.0.0 → 1.0.1) | `chore: update dependencies`    |
 
 **Format:**
 ```
