@@ -164,18 +164,12 @@ subprojects {
         
         repositories {
             // GitHub Packages (for CI and manual SNAPSHOT publishing)
-            // Only configure if credentials are available
-            val githubActor = System.getenv("GITHUB_ACTOR") ?: project.findProperty("gpr.user") as String?
-            val githubToken = System.getenv("GITHUB_TOKEN") ?: project.findProperty("gpr.token") as String?
-            
-            if (githubActor != null && githubToken != null) {
-                maven {
-                    name = "GitHubPackages"
-                    url = uri("https://maven.pkg.github.com/macstab/spring-redis-laned")
-                    credentials {
-                        username = githubActor
-                        password = githubToken
-                    }
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/macstab/spring-redis-laned")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR") ?: project.findProperty("gpr.user") as String?
+                    password = System.getenv("GITHUB_TOKEN") ?: project.findProperty("gpr.token") as String?
                 }
             }
             
@@ -186,8 +180,8 @@ subprojects {
             if (ossrhUsername != null && ossrhPassword != null) {
                 maven {
                     name = "OSSRH"
-                    val releasesRepoUrl = uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
-                    val snapshotsRepoUrl = uri("https://central.sonatype.com/repository/maven-snapshots/")
+                    val releasesRepoUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
+                    val snapshotsRepoUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
                     url = if (version.toString().endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl
                     credentials {
                         username = ossrhUsername
@@ -213,4 +207,63 @@ subprojects {
             onlyIf { !version.toString().endsWith("SNAPSHOT") }
         }
     } // End of isPublishable
+}
+
+// Task to show instructions for releasing to Maven Central
+tasks.register("releaseToCentral") {
+    group = "publishing"
+    description = "Publish staged deployment to Maven Central via API"
+
+    doLast {
+        val username = project.findProperty("ossrhUsername") as String?
+        val password = project.findProperty("ossrhPassword") as String?
+
+        if (username.isNullOrBlank() || password.isNullOrBlank()) {
+            logger.warn("┌─────────────────────────────────────────────────────────────┐")
+            logger.warn("│  ⚠️  Maven Central credentials not configured!              │")
+            logger.warn("├─────────────────────────────────────────────────────────────┤")
+            logger.warn("│  Add to ~/.gradle/gradle.properties:                        │")
+            logger.warn("│  ossrhUsername=<your-sonatype-token-username>               │")
+            logger.warn("│  ossrhPassword=<your-sonatype-token-password>               │")
+            logger.warn("└─────────────────────────────────────────────────────────────┘")
+            throw GradleException("Maven Central credentials missing. Cannot release.")
+        }
+
+        logger.lifecycle("┌─────────────────────────────────────────────────────────────┐")
+        logger.lifecycle("│  🚀 Publishing to Maven Central                             │")
+        logger.lifecycle("├─────────────────────────────────────────────────────────────┤")
+        logger.lifecycle("│  Group: ${project.group}                                    │")
+        logger.lifecycle("│  Version: ${project.version}                                │")
+        logger.lifecycle("└─────────────────────────────────────────────────────────────┘")
+
+        logger.lifecycle("📤 Triggering Central Portal manual upload API...")
+
+        val apiUrl = "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/com.macstab"
+
+        val process = ProcessBuilder(
+            "curl", "-u", "$username:$password",
+            "-X", "POST",
+            apiUrl
+        ).inheritIO().start()
+
+        val exitCode = process.waitFor()
+
+        if (exitCode == 0) {
+            logger.lifecycle("")
+            logger.lifecycle("┌─────────────────────────────────────────────────────────────┐")
+            logger.lifecycle("│  ✅ Successfully triggered publish to Maven Central!        │")
+            logger.lifecycle("├─────────────────────────────────────────────────────────────┤")
+            logger.lifecycle("│  Artifacts will sync to Maven Central in ~10-30 minutes     │")
+            logger.lifecycle("│  Check: https://central.sonatype.com/artifact/${project.group}")
+            logger.lifecycle("└─────────────────────────────────────────────────────────────┘")
+            logger.lifecycle("")
+        } else {
+            logger.error("Failed to publish. Manual fallback:")
+            logger.error("1. Go to: https://central.sonatype.com/")
+            logger.error("2. Navigate to: Deployments")
+            logger.error("3. Find: ${project.group}")
+            logger.error("4. Click: Publish")
+            throw GradleException("Failed to publish to Maven Central (exit code: $exitCode)")
+        }
+    }
 }

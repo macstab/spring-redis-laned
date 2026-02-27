@@ -1,5 +1,55 @@
 # Release Process
 
+## First-Time Maven Central Setup
+
+**Only needed ONCE for new namespace:**
+
+1. **Register with Sonatype Central Portal:**
+   - Go to: https://central.sonatype.com/
+   - Create account (or login)
+
+2. **Verify Namespace:**
+   - Click **"Namespaces"** → **"Add Namespace"**
+   - Enter: `com.macstab.oss`
+   - Verify domain ownership:
+     - Add TXT record to `macstab.com`
+     - Value shown in portal (e.g., `sonatype-verify=XXXXX`)
+     - Wait for DNS propagation (~5 min)
+     - Click "Verify"
+
+3. **Generate User Token:**
+   - Click your username → **"View Account"**
+   - Click **"Generate User Token"**
+   - Copy username + password to `~/.gradle/gradle.properties`:
+     ```properties
+     ossrhUsername=<token-username>
+     ossrhPassword=<token-password>
+     ```
+
+4. **Setup GPG Key:**
+   ```bash
+   # Generate key (if needed)
+   gpg --gen-key
+   
+   # Export to keyserver
+   gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>
+   
+   # Export secret keyring
+   gpg --export-secret-keys <KEY_ID> > ~/.ssh/mavencentral_gpg_keyring.gpg
+   ```
+
+5. **Configure Gradle:**
+   Add to `~/.gradle/gradle.properties`:
+   ```properties
+   signing.keyId=<last-8-chars-of-key-id>
+   signing.password=<gpg-passphrase>
+   signing.secretKeyRingFile=/Users/you/.ssh/mavencentral_gpg_keyring.gpg
+   ```
+
+**After this one-time setup, you can publish releases!**
+
+---
+
 ## Publishing Overview and Steps
 
 | Target              | Trigger               | Version          | Artifact  |
@@ -28,7 +78,7 @@ git push origin main
 **Users can depend on SNAPSHOT:**
 ```xml
 <dependency>
-  <groupId>com.macstab.oss.redis.laned</groupId>
+  <groupId>com.macstab.oss</groupId>
   <artifactId>redis-laned-spring-boot-3-starter</artifactId>
   <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -69,29 +119,69 @@ git push origin main
 - ✅ CHANGELOG.md updated
 - ✅ `1.0.0` available on GitHub Packages
 
-### Step 2: Publish to Maven Central (Optional)
+### Step 2: Publish to Maven Central (Manual)
+
+**Prerequisites:**
+
+1. **Configure credentials** in `~/.gradle/gradle.properties`:
+   ```properties
+   ossrhUsername=<your-sonatype-token-username>
+   ossrhPassword=<your-sonatype-token-password>
+   signing.keyId=<gpg-key-id>
+   signing.password=<gpg-key-password>
+   signing.secretKeyRingFile=<path-to-keyring.gpg>
+   ```
+
+2. **Get Sonatype credentials:**
+   - Go to: https://central.sonatype.com/
+   - Login → Account → "Generate User Token"
+   - Copy username + password to `gradle.properties`
+
+**Publish to Maven Central Staging:**
 
 ```bash
 # Checkout the release tag
 git checkout 1.0.0
 
-# Publish to Maven Central staging
+# Publish artifacts to staging
 ./gradlew clean build publish
 
 # Expected output:
 # > Task :redis-laned-core:signMavenPublication
 # > Task :redis-laned-core:publishMavenPublicationToOSSRHRepository
 # BUILD SUCCESSFUL
+
+# Show release instructions
+./gradlew releaseToCentral
 ```
 
-**Go to:** https://central.sonatype.com/
+**Manual Release via Central Portal:**
 
-1. Navigate to **"Deployments"**
-2. Find: `com.macstab.oss:redis-laned-core:1.0.0`
-3. Review artifacts
-4. Click **"Publish"**
+1. **Login to Central Portal:**
+   - Go to: https://central.sonatype.com/
+   - Login with your Sonatype account
 
-**Wait:** 10-30 min for sync to Maven Central.
+2. **Find Deployment:**
+   - Navigate to: **"Deployments"** (left sidebar)
+   - Search for: `com.macstab.oss`
+   - Find your version: `1.0.0`
+
+3. **Review Artifacts:**
+   - Click on the deployment
+   - Verify all artifacts uploaded correctly:
+     - JARs (main, sources, javadoc)
+     - POMs
+     - Signatures (.asc files)
+
+4. **Publish to Maven Central:**
+   - Click **"Publish"** button
+   - Confirm publication
+   - Artifacts are immediately sent to Maven Central
+
+5. **Verify Publication:**
+   - Wait 10-30 minutes for sync
+   - Check: https://central.sonatype.com/artifact/com.macstab.oss/redis-laned-core
+   - Check: https://repo1.maven.org/maven2/com/macstab/oss/redis-laned-core/
 
 ```bash
 # Return to main
@@ -152,7 +242,8 @@ git push origin v1.0.0
 ```bash
 git checkout v1.0.0
 ./gradlew clean build publish
-# → Go to central.sonatype.com → Publish
+./gradlew releaseToCentral  # Shows manual release instructions
+# → Go to central.sonatype.com → Deployments → Publish
 git checkout main
 ```
 
@@ -177,9 +268,22 @@ git push
 - Check GitHub Actions logs
 
 ### Maven Central Publishing Fails
-- Verify `~/.gradle/gradle.properties` has `ossrhUsername` + `ossrhPassword`
+
+**HTTP 401 Unauthorized:**
+- Verify `~/.gradle/gradle.properties` has correct credentials
+- Regenerate token at: https://central.sonatype.com/ → Account → Generate User Token
+- **Important:** New Central Portal uses different credentials than old JIRA!
+
+**HTTP 405 Not Allowed / HTTP 402 Payment Required:**
+- Namespace not verified in Central Portal
+- Go to: https://central.sonatype.com/ → Namespaces
+- Add namespace: `com.macstab.oss` (or your groupId)
+- Verify domain ownership (TXT record on `macstab.com`)
+
+**Signing Fails:**
 - Verify GPG key configured: `signing.keyId`, `signing.password`, `signing.secretKeyRingFile`
 - Check GPG key uploaded to keyserver: `gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>`
+- Test signing: `gpg --sign --armor test.txt`
 
 ### Build Fails
 ```bash
