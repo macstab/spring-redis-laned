@@ -1,0 +1,26 @@
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+.mvn/maven.config
+.mvn/settings.xml
+
+.DS_Store
+
+# We do not hold generated sources in version control
+src-gen/
+META-INF/
+
+/build/
+**/build/
+/.gradle/
+MEMORY.md
