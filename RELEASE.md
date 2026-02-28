@@ -78,7 +78,7 @@ git push origin main
 **Users can depend on SNAPSHOT:**
 ```xml
 <dependency>
-  <groupId>com.macstab.oss</groupId>
+  <groupId>com.macstab.oss.redis</groupId>
   <artifactId>redis-laned-spring-boot-3-starter</artifactId>
   <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -180,8 +180,8 @@ git checkout 1.0.0
 
 5. **Verify Publication:**
    - Wait 10-30 minutes for sync
-   - Check: https://central.sonatype.com/artifact/com.macstab.oss/redis-laned-core
-   - Check: https://repo1.maven.org/maven2/com/macstab/oss/redis-laned-core/
+   - Check: https://central.sonatype.com/artifact/com.macstab.oss.redis/redis-laned-core
+   - Check: https://repo1.maven.org/maven2/com/macstab/oss/redis/redis-laned-core/
 
 ```bash
 # Return to main
