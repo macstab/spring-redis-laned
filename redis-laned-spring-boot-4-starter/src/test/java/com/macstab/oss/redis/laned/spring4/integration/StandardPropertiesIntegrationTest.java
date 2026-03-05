@@ -46,7 +46,12 @@ import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
  */
 @Tag("integration")
 @DisplayName("Standard Spring Boot Redis Properties Integration Tests")
-class StandardPropertiesIntegrationTest {
+class StandardPropertiesIntegrationTest extends com.macstab.oss.redis.laned.TestcontainersSupport {
+
+  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
+  static {
+    com.macstab.oss.redis.laned.TestcontainersSupport.configure();
+  }
 
   private static GenericContainer<?> redis;
 

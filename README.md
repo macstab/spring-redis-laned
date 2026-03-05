@@ -71,6 +71,7 @@ round-robin dispatched. One dependency, two config lines. Done.
     * [Key Classes](#key-classes)
   * [Configuration](#configuration)
     * [Minimal (Standalone, No Auth)](#minimal-standalone-no-auth)
+    * [Annotation-Based (Type-Safe, Overrides YAML)](#annotation-based-type-safe-overrides-yaml)
     * [Production (TLS + Auth + Timeouts)](#production-tls--auth--timeouts)
     * [Mutual TLS (Client Certificates)](#mutual-tls-client-certificates)
     * [Sentinel (High Availability)](#sentinel-high-availability)
@@ -178,9 +179,29 @@ implementation 'com.macstab.oss.redis:redis-laned-spring-boot-4-starter:1.0.0'
 
 **2. Configure (2 Lines)**
 
+**Option A: YAML Configuration** (most common)
+
 ```yaml
 spring.data.redis.connection.strategy: LANED
 spring.data.redis.connection.lanes: 8
+```
+
+**Option B: Annotation Configuration** (type-safe, overrides YAML)
+
+```java
+import com.macstab.oss.redis.laned.config.LanedRedisConnection;
+import com.macstab.oss.redis.laned.strategy.LaneSelectionStrategyType;
+
+@SpringBootApplication
+@LanedRedisConnection(
+  lanes = 8,
+  strategy = LaneSelectionStrategyType.THREAD_AFFINITY
+)
+public class MyApplication {
+  public static void main(String[] args) {
+    SpringApplication.run(MyApplication.class, args);
+  }
+}
 ```
 
 **That's it.** Your existing `RedisTemplate` / `@Cacheable` / Spring Data Redis code works instantly. Zero code changes.
@@ -189,6 +210,8 @@ spring.data.redis.connection.lanes: 8
 ```
 INFO ... LanedRedisAutoConfiguration : Activated laned connection strategy with 8 lanes
 ```
+
+**📖 Full Annotation Docs:** [docs/ANNOTATION-CONFIGURATION.md](docs/ANNOTATION-CONFIGURATION.md)
 
 ---
 
@@ -596,6 +619,7 @@ Expected p99: 87.5% × 0.4ms + 12.5% × 18ms ≈ 2.6ms
 
 ### Quick Links
 
+- **[Annotation Configuration Guide](docs/ANNOTATION-CONFIGURATION.md)** — Type-safe `@LanedRedisConnection` (overrides YAML) ✅ **WORKING**
 - **[Complete Technical Reference](docs/TECHNICAL_REFERENCE.md)** — Architecture, SSL/TLS, performance model, operational runbooks
 - **[Design Decision: Thread Affinity](docs/DESIGN_DECISION_THREAD_AFFINITY.md)** — Why MurmurHash3(threadId) vs ThreadLocal
 - **[Transaction Safety Deep Dive](docs/TRANSACTION_SAFETY_DEEP_DIVE.md)** — RESP protocol constraints, collision math
@@ -1421,6 +1445,38 @@ spring:
 
 Drop-in. No code changes required in consuming services. Add the dependency and the
 auto-configuration activates.
+
+### Annotation-Based (Type-Safe, Overrides YAML)
+
+```java
+import com.macstab.oss.redis.laned.config.LanedRedisConnection;
+import com.macstab.oss.redis.laned.strategy.LaneSelectionStrategyType;
+
+@SpringBootApplication
+@LanedRedisConnection(
+  lanes = 8,
+  strategy = LaneSelectionStrategyType.THREAD_AFFINITY,
+  metricsEnabled = true
+)
+public class MyApplication {
+  public static void main(String[] args) {
+    SpringApplication.run(MyApplication.class, args);
+  }
+}
+```
+
+**Configuration precedence (highest to lowest):**
+1. **`@LanedRedisConnection` annotation** ← Highest priority
+2. YAML/properties (`spring.data.redis.connection.*`)
+3. Defaults (lanes=8, strategy=ROUND_ROBIN)
+
+**When to use:**
+- ✅ Explicit configuration in code (self-documenting)
+- ✅ Per-environment configuration classes (@Profile)
+- ✅ Type-safe compile-time validation
+- ✅ Override defaults without touching YAML
+
+**📖 Full Guide:** [docs/ANNOTATION-CONFIGURATION.md](docs/ANNOTATION-CONFIGURATION.md)
 
 ### Production (TLS + Auth + Timeouts)
 

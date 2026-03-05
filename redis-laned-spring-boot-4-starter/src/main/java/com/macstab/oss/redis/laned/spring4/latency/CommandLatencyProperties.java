@@ -36,6 +36,11 @@ import lombok.Data;
 @ConfigurationProperties(prefix = "management.metrics.laned-redis.command-latency")
 public class CommandLatencyProperties {
 
+  /** Creates properties (Spring Boot populates via {@code @ConfigurationProperties} binding). */
+  public CommandLatencyProperties() {
+    // Lombok @Data generates constructor
+  }
+
   /**
    * Enable command latency tracking.
    *

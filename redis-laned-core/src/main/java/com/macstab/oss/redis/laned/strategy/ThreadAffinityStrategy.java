@@ -252,6 +252,16 @@ public final class ThreadAffinityStrategy implements LaneSelectionStrategy {
   private static final long MURMUR3_C1 = 0xff51afd7ed558ccdL;
 
   /**
+   * Creates a thread affinity strategy.
+   *
+   * <p>Stateless implementation - no internal state, no cleanup required. Same thread ID always
+   * maps to same lane via MurmurHash3. Safe for servlet containers (no ClassLoader leak risk).
+   */
+  public ThreadAffinityStrategy() {
+    // Stateless - no initialization needed
+  }
+
+  /**
    * Selects lane using MurmurHash3 of thread ID.
    *
    * <p><strong>Virtual thread compatibility (JDK 21+):</strong>

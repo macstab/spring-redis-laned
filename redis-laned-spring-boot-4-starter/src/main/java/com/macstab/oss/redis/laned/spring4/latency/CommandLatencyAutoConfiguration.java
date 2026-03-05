@@ -68,6 +68,9 @@ import lombok.extern.slf4j.Slf4j;
  * <p><strong>Order:</strong> Runs BEFORE LettuceConnectionConfiguration (ClientResources must exist
  * before RedisClient is created).
  *
+ * <p><strong>Construction:</strong> Spring Boot instantiates this class via no-arg constructor.
+ * Public no-arg constructor is available for Spring's dependency injection.
+ *
  * @since 1.2.0
  * @author Christian Schnapka - Macstab GmbH
  * @see CommandLatencyCollector
@@ -83,6 +86,11 @@ import lombok.extern.slf4j.Slf4j;
     havingValue = "true")
 @EnableConfigurationProperties(CommandLatencyProperties.class)
 public class CommandLatencyAutoConfiguration {
+
+  /** Creates the auto-configuration (Spring Boot instantiates via no-arg constructor). */
+  public CommandLatencyAutoConfiguration() {
+    // Spring Boot instantiates via default constructor
+  }
 
   /**
    * Creates {@link ClientResources} bean with {@link CommandLatencyCollector} enabled.

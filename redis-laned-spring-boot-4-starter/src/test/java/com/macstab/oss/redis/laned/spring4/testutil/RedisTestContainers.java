@@ -2,7 +2,6 @@
 package com.macstab.oss.redis.laned.spring4.testutil;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -10,6 +9,7 @@ import java.util.List;
 
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
 
@@ -122,15 +122,34 @@ public final class RedisTestContainers {
     Network network = Network.newNetwork();
 
     // Master Redis
+    // Start without announce config first, will configure after getting mapped port
     GenericContainer<?> master =
         new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withNetwork(network)
             .withNetworkAliases("redis-master")
             .withExposedPorts(6379)
             .withCommand("redis-server", "--protected-mode", "no")
+            .withCreateContainerCmdModifier(
+                cmd ->
+                    cmd.withHostConfig(
+                        cmd.getHostConfig()
+                            .withExtraHosts("host.testcontainers.internal:host-gateway")))
+            .waitingFor(Wait.forLogMessage(".*Ready to accept connections.*\\n", 1))
             .withStartupTimeout(Duration.ofSeconds(30));
 
     master.start();
+
+    // Configure master to announce its externally-accessible address
+    // This allows Sentinel to return the correct address to clients
+    Integer masterMappedPort = master.getMappedPort(6379);
+    try {
+      master.execInContainer(
+          "redis-cli", "CONFIG", "SET", "replica-announce-ip", "host.testcontainers.internal");
+      master.execInContainer(
+          "redis-cli", "CONFIG", "SET", "replica-announce-port", String.valueOf(masterMappedPort));
+    } catch (IOException | InterruptedException e) {
+      throw new RuntimeException("Failed to configure master announce address", e);
+    }
 
     // Replica 1
     GenericContainer<?> replica1 =
@@ -140,6 +159,8 @@ public final class RedisTestContainers {
             .withExposedPorts(6379)
             .withCommand(
                 "redis-server", "--protected-mode", "no", "--replicaof", "redis-master", "6379")
+            .waitingFor(
+                Wait.forLogMessage(".*MASTER <-> REPLICA sync: Finished with success.*\\n", 1))
             .withStartupTimeout(Duration.ofSeconds(30));
 
     replica1.start();
@@ -152,27 +173,35 @@ public final class RedisTestContainers {
             .withExposedPorts(6379)
             .withCommand(
                 "redis-server", "--protected-mode", "no", "--replicaof", "redis-master", "6379")
+            .waitingFor(
+                Wait.forLogMessage(".*MASTER <-> REPLICA sync: Finished with success.*\\n", 1))
             .withStartupTimeout(Duration.ofSeconds(30));
 
     replica2.start();
 
-    // Sentinel configuration (written to file, then mounted)
-    String sentinelConf =
-        """
-        port 26379
-        sentinel monitor mymaster redis-master 6379 2
-        sentinel down-after-milliseconds mymaster 5000
-        sentinel parallel-syncs mymaster 1
-        sentinel failover-timeout mymaster 10000
-        """;
+    // Get master IP address from Docker network
+    // Redis Sentinel cannot resolve Docker network aliases, must use IP
+    String masterIp =
+        master.getContainerInfo().getNetworkSettings().getNetworks().values().stream()
+            .findFirst()
+            .orElseThrow(() -> new RuntimeException("Master container has no network"))
+            .getIpAddress();
 
-    Path sentinelConfPath;
-    try {
-      sentinelConfPath = Files.createTempFile("sentinel", ".conf");
-      Files.writeString(sentinelConfPath, sentinelConf);
-    } catch (IOException e) {
-      throw new RuntimeException("Failed to create sentinel.conf", e);
-    }
+    // Sentinel configuration command (written inline at container startup)
+    // Monitors master via Docker IP, but announces external (mapped) address to clients
+    String sentinelCommand =
+        "printf \"port 26379\\n"
+            + "sentinel monitor mymaster "
+            + masterIp
+            + " 6379 2\\n"
+            + "sentinel down-after-milliseconds mymaster 5000\\n"
+            + "sentinel parallel-syncs mymaster 1\\n"
+            + "sentinel failover-timeout mymaster 10000\\n"
+            + "sentinel announce-ip host.docker.internal\\n"
+            + "sentinel announce-port "
+            + masterMappedPort
+            + "\\n\" > /tmp/sentinel.conf && "
+            + "redis-server /tmp/sentinel.conf --sentinel";
 
     // Sentinel 1
     GenericContainer<?> sentinel1 =
@@ -180,9 +209,15 @@ public final class RedisTestContainers {
             .withNetwork(network)
             .withNetworkAliases("sentinel1")
             .withExposedPorts(26379)
-            .withCopyFileToContainer(
-                MountableFile.forHostPath(sentinelConfPath), "/etc/sentinel.conf")
-            .withCommand("redis-sentinel", "/etc/sentinel.conf")
+            .withCreateContainerCmdModifier(
+                cmd ->
+                    cmd.withHostConfig(
+                        cmd.getHostConfig()
+                            .withExtraHosts("host.testcontainers.internal:host-gateway")))
+            .withCommand("sh", "-c", sentinelCommand)
+            .waitingFor(
+                Wait.forSuccessfulCommand("redis-cli -p 26379 SENTINEL master mymaster")
+                    .withStartupTimeout(Duration.ofSeconds(30)))
             .withStartupTimeout(Duration.ofSeconds(30));
 
     sentinel1.start();
@@ -193,9 +228,15 @@ public final class RedisTestContainers {
             .withNetwork(network)
             .withNetworkAliases("sentinel2")
             .withExposedPorts(26379)
-            .withCopyFileToContainer(
-                MountableFile.forHostPath(sentinelConfPath), "/etc/sentinel.conf")
-            .withCommand("redis-sentinel", "/etc/sentinel.conf")
+            .withCreateContainerCmdModifier(
+                cmd ->
+                    cmd.withHostConfig(
+                        cmd.getHostConfig()
+                            .withExtraHosts("host.testcontainers.internal:host-gateway")))
+            .withCommand("sh", "-c", sentinelCommand)
+            .waitingFor(
+                Wait.forSuccessfulCommand("redis-cli -p 26379 SENTINEL master mymaster")
+                    .withStartupTimeout(Duration.ofSeconds(30)))
             .withStartupTimeout(Duration.ofSeconds(30));
 
     sentinel2.start();
@@ -206,12 +247,27 @@ public final class RedisTestContainers {
             .withNetwork(network)
             .withNetworkAliases("sentinel3")
             .withExposedPorts(26379)
-            .withCopyFileToContainer(
-                MountableFile.forHostPath(sentinelConfPath), "/etc/sentinel.conf")
-            .withCommand("redis-sentinel", "/etc/sentinel.conf")
+            .withCreateContainerCmdModifier(
+                cmd ->
+                    cmd.withHostConfig(
+                        cmd.getHostConfig()
+                            .withExtraHosts("host.testcontainers.internal:host-gateway")))
+            .withCommand("sh", "-c", sentinelCommand)
+            .waitingFor(
+                Wait.forSuccessfulCommand("redis-cli -p 26379 SENTINEL master mymaster")
+                    .withStartupTimeout(Duration.ofSeconds(30)))
             .withStartupTimeout(Duration.ofSeconds(30));
 
     sentinel3.start();
+
+    // Additional wait for Sentinels to stabilize and be fully queryable
+    // Even after +monitor event, Sentinels need time to update internal state
+    try {
+      Thread.sleep(2000);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new RuntimeException("Interrupted while waiting for Sentinel stabilization", e);
+    }
 
     return new SentinelCluster(
         network, master, List.of(replica1, replica2), List.of(sentinel1, sentinel2, sentinel3));

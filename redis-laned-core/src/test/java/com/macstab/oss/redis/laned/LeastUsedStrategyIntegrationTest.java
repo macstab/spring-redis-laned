@@ -67,7 +67,12 @@ import io.lettuce.core.codec.StringCodec;
 @Testcontainers
 @Tag("integration")
 @DisplayName("LeastUsedStrategy Integration Tests (Real Redis)")
-class LeastUsedStrategyIntegrationTest {
+class LeastUsedStrategyIntegrationTest extends TestcontainersSupport {
+
+  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
+  static {
+    TestcontainersSupport.configure();
+  }
 
   @Container
   private static final GenericContainer<?> REDIS =

@@ -61,7 +61,12 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 @DisplayName("Transaction Safety (ThreadAffinity + Real Redis)")
-class TransactionSafetyIntegrationTest {
+class TransactionSafetyIntegrationTest extends com.macstab.oss.redis.laned.TestcontainersSupport {
+
+  // Force TestcontainersSupport configuration before ANY Testcontainers initialization
+  static {
+    com.macstab.oss.redis.laned.TestcontainersSupport.configure();
+  }
 
   private GenericContainer<?> redis;
   private RedisClient client;

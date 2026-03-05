@@ -1,0 +1,227 @@
+/* (C)2026 Christian Schnapka / Macstab GmbH */
+package com.macstab.oss.redis.laned.test.extension;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+import org.junit.jupiter.api.extension.AfterAllCallback;
+import org.junit.jupiter.api.extension.BeforeAllCallback;
+import org.junit.jupiter.api.extension.ExtensionContext;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.Network;
+import org.testcontainers.utility.DockerImageName;
+
+import com.macstab.oss.redis.laned.test.annotation.RedisSentinel;
+
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * JUnit 5 extension that manages a full Redis Sentinel cluster for {@link RedisSentinel} annotated
+ * tests.
+ *
+ * <p><strong>Cluster Topology:</strong>
+ *
+ * <pre>
+ * Network: shared Docker network
+ *   ├── Master:    redis-master:6379
+ *   ├── Replica 1: redis-replica-1:6379
+ *   ├── Replica 2: redis-replica-2:6379
+ *   ├── Sentinel 1: redis-sentinel-1:26379
+ *   ├── Sentinel 2: redis-sentinel-2:26379
+ *   └── Sentinel 3: redis-sentinel-3:26379
+ * </pre>
+ *
+ * <p><strong>Lifecycle:</strong>
+ *
+ * <ol>
+ *   <li>Create Docker network
+ *   <li>Start master
+ *   <li>Start replicas (configured to replicate from master)
+ *   <li>Start sentinels (configured to monitor master)
+ *   <li>Tests execute
+ *   <li>Stop all containers + network
+ * </ol>
+ *
+ * <p><strong>Platform Requirements:</strong> Linux host or dev container (native Docker
+ * networking). Automatically disabled on macOS/Windows hosts via {@code @DisabledOnNonLinuxHost}.
+ *
+ * @author Christian Schnapka - Macstab GmbH
+ */
+@Slf4j
+public final class SentinelContainerExtension implements BeforeAllCallback, AfterAllCallback {
+
+  private static final ExtensionContext.Namespace NAMESPACE =
+      ExtensionContext.Namespace.create(SentinelContainerExtension.class);
+
+  private static final String CLUSTER_KEY = "sentinel-cluster";
+
+  /**
+   * Creates a Sentinel container extension.
+   *
+   * <p>JUnit 5 instantiates this class via reflection (default constructor required). Extension is
+   * stateless; cluster state is stored in {@link ExtensionContext.Store}.
+   */
+  public SentinelContainerExtension() {
+    // Stateless - no initialization needed
+  }
+
+  @Override
+  public void beforeAll(final ExtensionContext context) {
+    final var annotation = context.getRequiredTestClass().getAnnotation(RedisSentinel.class);
+
+    if (annotation == null) {
+      log.warn("@RedisSentinel not found on test class, skipping cluster start");
+      return;
+    }
+
+    final var cluster = createCluster(annotation);
+    cluster.start();
+
+    log.info(
+        "Started Redis Sentinel cluster: master={}:{}, replicas={}, sentinels={}",
+        cluster.getMasterHost(),
+        cluster.getMasterPort(),
+        annotation.replicas(),
+        annotation.sentinels());
+
+    context.getStore(NAMESPACE).put(CLUSTER_KEY, cluster);
+  }
+
+  @Override
+  public void afterAll(final ExtensionContext context) {
+    final var cluster = context.getStore(NAMESPACE).get(CLUSTER_KEY, SentinelCluster.class);
+    if (cluster != null) {
+      log.info("Stopping Redis Sentinel cluster");
+      cluster.stop();
+    }
+  }
+
+  /**
+   * Create full Sentinel cluster from annotation.
+   *
+   * @param annotation configuration
+   * @return cluster (not started)
+   */
+  private SentinelCluster createCluster(final RedisSentinel annotation) {
+    final var network = Network.newNetwork();
+    final var image = DockerImageName.parse("redis:" + annotation.version());
+
+    // 1. Master
+    final var master =
+        new GenericContainer<>(image)
+            .withNetwork(network)
+            .withNetworkAliases("redis-master")
+            .withExposedPorts(6379)
+            .withCommand("redis-server");
+
+    // 2. Replicas
+    final var replicas = new ArrayList<GenericContainer<?>>();
+    for (int i = 1; i <= annotation.replicas(); i++) {
+      final var replica =
+          new GenericContainer<>(image)
+              .withNetwork(network)
+              .withNetworkAliases("redis-replica-" + i)
+              .withExposedPorts(6379)
+              .withCommand("redis-server", "--replicaof", "redis-master", "6379");
+      replicas.add(replica);
+    }
+
+    // 3. Sentinels
+    final var sentinels = new ArrayList<GenericContainer<?>>();
+    for (int i = 1; i <= annotation.sentinels(); i++) {
+      final var sentinel =
+          new GenericContainer<>(image)
+              .withNetwork(network)
+              .withNetworkAliases("redis-sentinel-" + i)
+              .withExposedPorts(26379)
+              .withCommand(
+                  "redis-sentinel",
+                  "/etc/redis/sentinel.conf",
+                  "--sentinel",
+                  "monitor",
+                  annotation.masterName(),
+                  "redis-master",
+                  "6379",
+                  String.valueOf(annotation.quorum()));
+      sentinels.add(sentinel);
+    }
+
+    return new SentinelCluster(network, master, replicas, sentinels, annotation.masterName());
+  }
+
+  /**
+   * Sentinel cluster holder (network + all containers).
+   *
+   * <p>Implements {@link ExtensionContext.Store.CloseableResource} for automatic cleanup.
+   */
+  @Getter
+  public static final class SentinelCluster implements ExtensionContext.Store.CloseableResource {
+    private final Network network;
+    private final GenericContainer<?> master;
+    private final List<GenericContainer<?>> replicas;
+    private final List<GenericContainer<?>> sentinels;
+    private final String masterName;
+
+    /**
+     * Creates a Sentinel cluster.
+     *
+     * @param network Docker network (must not be null)
+     * @param master Redis master container (must not be null)
+     * @param replicas Redis replica containers (must not be null, may be empty)
+     * @param sentinels Sentinel containers (must not be null, typically 3 or 5)
+     * @param masterName Sentinel master name (must not be null, e.g., "mymaster")
+     */
+    public SentinelCluster(
+        final Network network,
+        final GenericContainer<?> master,
+        final List<GenericContainer<?>> replicas,
+        final List<GenericContainer<?>> sentinels,
+        final String masterName) {
+      this.network = Objects.requireNonNull(network, "network");
+      this.master = Objects.requireNonNull(master, "master");
+      this.replicas = Objects.requireNonNull(replicas, "replicas");
+      this.sentinels = Objects.requireNonNull(sentinels, "sentinels");
+      this.masterName = Objects.requireNonNull(masterName, "masterName");
+    }
+
+    /** Start all containers (master → replicas → sentinels). */
+    public void start() {
+      master.start();
+      replicas.forEach(GenericContainer::start);
+      sentinels.forEach(GenericContainer::start);
+    }
+
+    /** Stop all containers + network. */
+    public void stop() {
+      sentinels.forEach(GenericContainer::stop);
+      replicas.forEach(GenericContainer::stop);
+      master.stop();
+      network.close();
+    }
+
+    /**
+     * Returns master container host (for direct connections).
+     *
+     * @return container host (typically "localhost" on Linux host, or Docker host IP)
+     */
+    public String getMasterHost() {
+      return master.getHost();
+    }
+
+    /**
+     * Returns master container port (mapped port).
+     *
+     * @return mapped port for Redis master (e.g., 32768 mapped to internal 6379)
+     */
+    public int getMasterPort() {
+      return master.getMappedPort(6379);
+    }
+
+    @Override
+    public void close() {
+      stop();
+    }
+  }
+}

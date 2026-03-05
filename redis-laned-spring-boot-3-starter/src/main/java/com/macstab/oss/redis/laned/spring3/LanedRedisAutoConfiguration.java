@@ -72,6 +72,11 @@ import lombok.extern.slf4j.Slf4j;
 @EnableConfigurationProperties({RedisProperties.class, RedisConnectionProperties.class})
 public class LanedRedisAutoConfiguration {
 
+  /** Creates the auto-configuration (Spring Boot instantiates when LANED strategy enabled). */
+  public LanedRedisAutoConfiguration() {
+    // Spring Boot instantiates via default constructor
+  }
+
   /**
    * Creates a laned Redis connection factory.
    *
@@ -87,8 +92,17 @@ public class LanedRedisAutoConfiguration {
    *       refresh, read-from replicas, etc.)
    * </ul>
    *
+   * <p><strong>Configuration Precedence:</strong>
+   *
+   * <ol>
+   *   <li>{@code @LanedRedisConnection} annotation (highest priority)
+   *   <li>YAML/properties ({@code spring.data.redis.connection.*})
+   *   <li>Defaults (lanes=8, metrics=enabled)
+   * </ol>
+   *
    * @param redisProperties Spring Boot Redis properties
-   * @param connectionProperties laned connection properties
+   * @param connectionProperties laned connection properties (from YAML)
+   * @param annotationProvider annotation-based configuration provider (highest priority)
    * @param sslBundles SSL bundles (optional, for TLS)
    * @param clientResources client resources (optional, for thread pools)
    * @param customizers configuration customizers (optional, for user extensions)
@@ -100,6 +114,7 @@ public class LanedRedisAutoConfiguration {
   public RedisConnectionFactory lanedRedisConnectionFactory(
       final RedisProperties redisProperties,
       final RedisConnectionProperties connectionProperties,
+      final ObjectProvider<LanedRedisAnnotationConfigurationProvider> annotationProvider,
       final ObjectProvider<SslBundles> sslBundles,
       final ObjectProvider<ClientResources> clientResources,
       final ObjectProvider<LettuceClientConfigurationBuilderCustomizer> customizers,
@@ -107,9 +122,17 @@ public class LanedRedisAutoConfiguration {
 
     final var clientConfig =
         buildClientConfiguration(redisProperties, sslBundles, clientResources, customizers);
-    final var lanes = connectionProperties.getLanes();
-    final var metrics = Optional.ofNullable(metricsProvider.getIfAvailable());
-    final var factory = createFactory(redisProperties, clientConfig, lanes, metrics);
+
+    // Resolve configuration (annotation > properties > defaults)
+    final var resolvedConfig = resolveConfiguration(connectionProperties, annotationProvider);
+    final var lanes = resolvedConfig.getLanes();
+    final var strategy = resolvedConfig.getStrategyType().createStrategy();
+    final Optional<com.macstab.oss.redis.laned.metrics.LanedRedisMetrics> metrics =
+        resolvedConfig.isMetricsEnabled()
+            ? Optional.ofNullable(metricsProvider.getIfAvailable())
+            : Optional.empty();
+
+    final var factory = createFactory(redisProperties, clientConfig, lanes, strategy, metrics);
 
     factory.setShareNativeConnection(true);
     factory.afterPropertiesSet();
@@ -117,32 +140,85 @@ public class LanedRedisAutoConfiguration {
     return factory;
   }
 
+  /**
+   * Resolve configuration from annotation, properties, or defaults.
+   *
+   * <p><strong>Precedence (highest to lowest):</strong>
+   *
+   * <ol>
+   *   <li>{@code @LanedRedisConnection} annotation
+   *   <li>YAML/properties ({@code spring.data.redis.connection.lanes})
+   *   <li>Defaults (lanes=8, strategy=ROUND_ROBIN, metrics=true)
+   * </ol>
+   *
+   * @param connectionProperties properties from YAML
+   * @param annotationProvider annotation scanner
+   * @return resolved configuration
+   */
+  private com.macstab.oss.redis.laned.config.LanedRedisConfigurationSource resolveConfiguration(
+      final RedisConnectionProperties connectionProperties,
+      final ObjectProvider<LanedRedisAnnotationConfigurationProvider> annotationProvider) {
+
+    // Priority 1: Check for @LanedRedisConnection annotation
+    final var provider = annotationProvider.getIfAvailable();
+    if (provider != null) {
+      final var annotationConfig = provider.getAnnotationConfiguration();
+      if (annotationConfig.isPresent()) {
+        if (log.isInfoEnabled()) {
+          final var config = annotationConfig.get();
+          log.info(
+              "Using @LanedRedisConnection annotation: lanes={}, strategy={}, metrics={}",
+              config.getLanes(),
+              config.getStrategyType(),
+              config.isMetricsEnabled());
+        }
+        return annotationConfig.get();
+      }
+    }
+
+    // Priority 2: Use YAML/properties
+    if (log.isDebugEnabled()) {
+      log.debug("Using YAML/properties configuration: lanes={}", connectionProperties.getLanes());
+    }
+
+    return com.macstab.oss.redis.laned.config.LanedRedisConfigurationSource.builder()
+        .lanes(connectionProperties.getLanes())
+        .strategyType(com.macstab.oss.redis.laned.strategy.LaneSelectionStrategyType.ROUND_ROBIN)
+        .metricsEnabled(true) // Always enabled when using properties
+        .sourceType(
+            com.macstab.oss.redis.laned.config.LanedRedisConfigurationSource.ConfigurationSourceType
+                .PROPERTIES)
+        .build();
+  }
+
   private LanedLettuceConnectionFactory createFactory(
       final RedisProperties redisProperties,
       final LettuceClientConfiguration clientConfig,
       final int lanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<com.macstab.oss.redis.laned.metrics.LanedRedisMetrics> metrics) {
 
     if (isSentinelConfigured(redisProperties)) {
-      return createSentinelFactory(redisProperties, clientConfig, lanes, metrics);
+      return createSentinelFactory(redisProperties, clientConfig, lanes, strategy, metrics);
     }
 
     if (isClusterConfigured(redisProperties)) {
-      return createClusterFactory(redisProperties, clientConfig, lanes, metrics);
+      return createClusterFactory(redisProperties, clientConfig, lanes, strategy, metrics);
     }
 
-    return createStandaloneFactory(redisProperties, clientConfig, lanes, metrics);
+    return createStandaloneFactory(redisProperties, clientConfig, lanes, strategy, metrics);
   }
 
   private LanedLettuceConnectionFactory createSentinelFactory(
       final RedisProperties redisProperties,
       final LettuceClientConfiguration clientConfig,
       final int lanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<com.macstab.oss.redis.laned.metrics.LanedRedisMetrics> metrics) {
 
     final var sentinelConfig = buildSentinelConfig(redisProperties);
     final var factory =
-        new LanedLettuceConnectionFactory(sentinelConfig, clientConfig, lanes, metrics);
+        new LanedLettuceConnectionFactory(sentinelConfig, clientConfig, lanes, strategy, metrics);
 
     if (log.isInfoEnabled()) {
       log.info(
@@ -159,11 +235,12 @@ public class LanedRedisAutoConfiguration {
       final RedisProperties redisProperties,
       final LettuceClientConfiguration clientConfig,
       final int lanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<com.macstab.oss.redis.laned.metrics.LanedRedisMetrics> metrics) {
 
     final var clusterConfig = buildClusterConfig(redisProperties);
     final var factory =
-        new LanedLettuceConnectionFactory(clusterConfig, clientConfig, lanes, metrics);
+        new LanedLettuceConnectionFactory(clusterConfig, clientConfig, lanes, strategy, metrics);
 
     if (log.isInfoEnabled()) {
       log.info(
@@ -179,11 +256,12 @@ public class LanedRedisAutoConfiguration {
       final RedisProperties redisProperties,
       final LettuceClientConfiguration clientConfig,
       final int lanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<com.macstab.oss.redis.laned.metrics.LanedRedisMetrics> metrics) {
 
     final var standaloneConfig = buildStandaloneConfig(redisProperties);
     final var factory =
-        new LanedLettuceConnectionFactory(standaloneConfig, clientConfig, lanes, metrics);
+        new LanedLettuceConnectionFactory(standaloneConfig, clientConfig, lanes, strategy, metrics);
 
     if (log.isInfoEnabled()) {
       log.info(

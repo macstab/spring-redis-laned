@@ -43,7 +43,12 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 @Tag("integration")
 @Testcontainers
 @DisplayName("Metrics Integration Test")
-class MetricsIntegrationTest {
+class MetricsIntegrationTest extends com.macstab.oss.redis.laned.TestcontainersSupport {
+
+  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
+  static {
+    com.macstab.oss.redis.laned.TestcontainersSupport.configure();
+  }
 
   @Nested
   @DisplayName("Spring Boot 3 Metrics Integration")

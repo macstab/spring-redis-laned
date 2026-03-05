@@ -72,6 +72,11 @@ import lombok.extern.slf4j.Slf4j;
 @EnableConfigurationProperties({DataRedisProperties.class, RedisConnectionProperties.class})
 public class LanedRedisAutoConfiguration {
 
+  /** Creates the auto-configuration (Spring Boot instantiates when LANED strategy enabled). */
+  public LanedRedisAutoConfiguration() {
+    // Spring Boot instantiates via default constructor
+  }
+
   /**
    * Creates a laned Redis connection factory.
    *

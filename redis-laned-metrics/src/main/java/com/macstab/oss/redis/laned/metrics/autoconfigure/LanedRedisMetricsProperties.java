@@ -31,12 +31,26 @@ import lombok.Data;
  *   <li>{@code slow-command-threshold}: {@code 10ms}
  * </ul>
  *
+ * <p><strong>Construction:</strong> Spring Boot instantiates this class and binds properties via
+ * {@code @ConfigurationProperties}. Lombok {@code @Data} generates getters/setters and no-arg
+ * constructor.
+ *
  * @since 1.0.0
  * @author Christian Schnapka - Macstab GmbH
  */
 @Data
 @ConfigurationProperties(prefix = "management.metrics.laned-redis")
 public class LanedRedisMetricsProperties {
+
+  /**
+   * Creates properties with default values.
+   *
+   * <p>Spring Boot instantiates this class and populates fields from {@code
+   * management.metrics.laned-redis.*} properties.
+   */
+  public LanedRedisMetricsProperties() {
+    // Lombok @Data generates constructor - this explicit declaration satisfies javadoc
+  }
 
   /**
    * Enable laned Redis metrics collection.
@@ -129,10 +143,23 @@ public class LanedRedisMetricsProperties {
    * <p>Integrates with Lettuce's {@code CommandLatencyCollector} to export P50/P95/P99 latencies
    * per command type.
    *
+   * <p><strong>Construction:</strong> Lombok {@code @Data} generates no-arg constructor with
+   * default values. Spring Boot binds properties to this nested configuration class.
+   *
    * @since 1.2.0
    */
   @Data
   public static class CommandLatency {
+
+    /**
+     * Creates command latency config with default values.
+     *
+     * <p>Spring Boot populates nested properties from {@code
+     * management.metrics.laned-redis.command-latency.*}.
+     */
+    public CommandLatency() {
+      // Lombok @Data generates constructor
+    }
 
     /**
      * Enable command latency tracking and export.
@@ -193,10 +220,23 @@ public class LanedRedisMetricsProperties {
    *         command-latency: "platform.redis.cmd_latency"
    * }</pre>
    *
+   * <p><strong>Construction:</strong> Lombok {@code @Data} generates no-arg constructor with
+   * default values. Spring Boot binds properties to this nested configuration class.
+   *
    * @since 1.2.0
    */
   @Data
   public static class MetricNames {
+
+    /**
+     * Creates metric names config with default values.
+     *
+     * <p>Spring Boot populates nested properties from {@code
+     * management.metrics.laned-redis.metric-names.*}.
+     */
+    public MetricNames() {
+      // Lombok @Data generates constructor
+    }
 
     /** Metric name prefix (hierarchical: domain.client.feature). */
     private String prefix = "redis.lettuce.laned";

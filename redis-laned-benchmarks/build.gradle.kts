@@ -22,7 +22,7 @@ dependencies {
     jmh(project(":redis-laned-core"))
     
     // Testcontainers
-    jmh("org.testcontainers:testcontainers:1.19.3")
+    jmh("org.testcontainers:testcontainers:1.20.4")
     
     // Lettuce (Redis client)
     jmh("io.lettuce:lettuce-core:6.7.1.RELEASE")
