@@ -62,13 +62,7 @@ import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
 @Testcontainers
 @Tag("integration")
 @DisplayName("LanedRedisTemplate Integration Tests")
-class LanedRedisTemplateIntegrationTest extends com.macstab.oss.redis.laned.TestcontainersSupport {
-
-  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
-  static {
-    com.macstab.oss.redis.laned.TestcontainersSupport.configure();
-  }
-
+class LanedRedisTemplateIntegrationTest {
   @Container
   private static final GenericContainer<?> REDIS = RedisTestContainers.createStandalone();
 

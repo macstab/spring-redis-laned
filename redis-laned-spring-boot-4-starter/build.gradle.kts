@@ -40,6 +40,9 @@ dependencies {
     testImplementation(project(":redis-laned-metrics"))
     testImplementation("io.micrometer:micrometer-core:1.12.0")
     
+    // Test - Test utilities (shared annotations and container extensions)
+    testImplementation(project(":redis-laned-test-utils"))
+    
     // Test - Spring Boot
     testImplementation("org.springframework.boot:spring-boot-starter-test:4.0.3") {
         // Let Spring Boot 4 control JUnit version (6.0.3, not root 5.12.2)

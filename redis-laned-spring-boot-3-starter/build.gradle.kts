@@ -20,6 +20,9 @@ dependencies {
     testImplementation(project(":redis-laned-metrics"))
     testImplementation("io.micrometer:micrometer-core:1.12.0")
     
+    // Test - Test utilities (shared annotations and container extensions)
+    testImplementation(project(":redis-laned-test-utils"))
+    
     // Test - Spring Boot
     testImplementation("org.springframework.boot:spring-boot-starter-test:3.5.11")
     testRuntimeOnly("ch.qos.logback:logback-classic:1.5.15")

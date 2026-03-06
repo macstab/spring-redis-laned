@@ -66,12 +66,7 @@ import io.lettuce.core.codec.StringCodec;
  */
 @Testcontainers
 @DisplayName("LanedConnectionManager Integration Tests (Real Redis)")
-class LanedConnectionManagerIntegrationTest extends TestcontainersSupport {
-
-  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
-  static {
-    TestcontainersSupport.configure();
-  }
+class LanedConnectionManagerIntegrationTest {
 
   @Container
   private static final GenericContainer<?> REDIS =

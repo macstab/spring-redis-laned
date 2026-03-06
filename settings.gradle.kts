@@ -10,6 +10,5 @@ include(
     "redis-laned-spring-boot-4-starter",
     "redis-laned-metrics",
     "redis-laned-examples",
-    "redis-laned-load-tests",
     "redis-laned-benchmarks"
 )

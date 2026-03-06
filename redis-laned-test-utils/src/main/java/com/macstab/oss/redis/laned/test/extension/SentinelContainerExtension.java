@@ -50,12 +50,17 @@ import lombok.extern.slf4j.Slf4j;
  * @author Christian Schnapka - Macstab GmbH
  */
 @Slf4j
-public final class SentinelContainerExtension implements BeforeAllCallback, AfterAllCallback {
+public final class SentinelContainerExtension implements BeforeAllCallback, AfterAllCallback, org.junit.jupiter.api.extension.ParameterResolver {
 
   private static final ExtensionContext.Namespace NAMESPACE =
       ExtensionContext.Namespace.create(SentinelContainerExtension.class);
 
   private static final String CLUSTER_KEY = "sentinel-cluster";
+  
+  /**
+   * System property key for sentinel nodes (for Spring @TestPropertySource / @DynamicPropertySource).
+   */
+  public static final String SENTINEL_NODES_PROPERTY = "sentinel.nodes";
 
   /**
    * Creates a Sentinel container extension.
@@ -79,12 +84,17 @@ public final class SentinelContainerExtension implements BeforeAllCallback, Afte
     final var cluster = createCluster(annotation);
     cluster.start();
 
+    // Expose sentinel nodes as system property for Spring Boot @TestPropertySource / @DynamicPropertySource
+    final var sentinelNodes = cluster.getSentinels().get(0).getHost() + ":" + cluster.getSentinels().get(0).getMappedPort(26379);
+    System.setProperty(SENTINEL_NODES_PROPERTY, sentinelNodes);
+
     log.info(
-        "Started Redis Sentinel cluster: master={}:{}, replicas={}, sentinels={}",
+        "Started Redis Sentinel cluster: master={}:{}, replicas={}, sentinels={}, sentinelNodes={}",
         cluster.getMasterHost(),
         cluster.getMasterPort(),
         annotation.replicas(),
-        annotation.sentinels());
+        annotation.sentinels(),
+        sentinelNodes);
 
     context.getStore(NAMESPACE).put(CLUSTER_KEY, cluster);
   }
@@ -95,7 +105,22 @@ public final class SentinelContainerExtension implements BeforeAllCallback, Afte
     if (cluster != null) {
       log.info("Stopping Redis Sentinel cluster");
       cluster.stop();
+      System.clearProperty(SENTINEL_NODES_PROPERTY);
     }
+  }
+
+  @Override
+  public boolean supportsParameter(
+      final org.junit.jupiter.api.extension.ParameterContext parameterContext,
+      final ExtensionContext extensionContext) {
+    return parameterContext.getParameter().getType().equals(SentinelCluster.class);
+  }
+
+  @Override
+  public Object resolveParameter(
+      final org.junit.jupiter.api.extension.ParameterContext parameterContext,
+      final ExtensionContext extensionContext) {
+    return extensionContext.getStore(NAMESPACE).get(CLUSTER_KEY, SentinelCluster.class);
   }
 
   /**

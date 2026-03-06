@@ -64,13 +64,7 @@ import com.macstab.oss.redis.laned.spring3.testutil.RedisTestContainers;
  */
 @Tag("integration")
 @DisplayName("SSL/TLS Integration Tests")
-class SSLIntegrationTest extends com.macstab.oss.redis.laned.TestcontainersSupport {
-
-  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
-  static {
-    com.macstab.oss.redis.laned.TestcontainersSupport.configure();
-  }
-
+class SSLIntegrationTest {
   // Shared TLS Redis container (started once for all tests)
   private static GenericContainer<?> REDIS_TLS;
 

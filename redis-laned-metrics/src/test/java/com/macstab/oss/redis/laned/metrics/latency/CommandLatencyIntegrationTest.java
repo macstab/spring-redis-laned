@@ -59,13 +59,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 @Testcontainers
 @Tag("integration")
 @DisplayName("CommandLatencyExporter Integration Tests")
-class CommandLatencyIntegrationTest extends com.macstab.oss.redis.laned.TestcontainersSupport {
-
-  // CRITICAL: Configure TestcontainersSupport BEFORE static container initialization
-  static {
-    com.macstab.oss.redis.laned.TestcontainersSupport.configure();
-  }
-
+class CommandLatencyIntegrationTest {
   @Container
   static final GenericContainer<?> redis =
       new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))

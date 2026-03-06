@@ -26,7 +26,7 @@ import com.macstab.oss.redis.laned.test.extension.RedisContainerExtension;
  *   @Test
  *   void test(RedisConnectionInfo info) {
  *     // Redis running on info.getHost() : info.getPort()
- *   }
+ *   }i
  * }
  * }</pre>
  *
