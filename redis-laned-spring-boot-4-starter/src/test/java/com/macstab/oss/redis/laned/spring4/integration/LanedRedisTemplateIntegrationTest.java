@@ -28,7 +28,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
+import com.macstab.oss.redis.laned.test.factory.RedisContainerFactory;
 
 /**
  * Integration tests for {@link RedisTemplate} with laned connections.
@@ -64,7 +64,7 @@ import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
 @DisplayName("LanedRedisTemplate Integration Tests")
 class LanedRedisTemplateIntegrationTest {
   @Container
-  private static final GenericContainer<?> REDIS = RedisTestContainers.createStandalone();
+  private static final GenericContainer<?> REDIS = RedisContainerFactory.createStandalone();
 
   @DynamicPropertySource
   static void redisProperties(DynamicPropertyRegistry registry) {

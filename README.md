@@ -1791,6 +1791,74 @@ spring:
 
 ---
 
+## Testing
+
+**Distinguished-level test infrastructure** with Testcontainers support.
+
+### Quick Start
+
+```java
+@SpringBootTest
+@RedisStandalone  // Auto-starts Redis container
+class MyIntegrationTest {
+    
+    @Autowired
+    private RedisTemplate<String, String> redisTemplate;
+    
+    @Test
+    void testRedisOperations() {
+        redisTemplate.opsForValue().set("key", "value");
+        assertThat(redisTemplate.opsForValue().get("key"))
+            .isEqualTo("value");
+    }
+}
+```
+
+### Sentinel Cluster
+
+```java
+@SpringBootTest(properties = {
+    "spring.data.redis.sentinel.master=mymaster",
+    "spring.data.redis.sentinel.nodes=${sentinel.nodes}",
+    "spring.data.redis.lettuce.read-from=REPLICA_PREFERRED"
+})
+@RedisSentinel(masterName = "mymaster", replicas = 2, sentinels = 3)
+class SentinelTest {
+    // Full cluster: 1 master + 2 replicas + 3 sentinels
+    // Auto-configured, no manual setup
+}
+```
+
+### Command Tracking (Verify Routing)
+
+```java
+@Test
+void verifyReplicaReads() {
+    // Track commands on replica
+    RedisCommandTracker tracker = new RedisCommandTracker(replicaContainer);
+    tracker.start();
+    
+    // Execute reads
+    redisTemplate.opsForValue().get("key");
+    
+    tracker.stop();
+    
+    // Verify reads went to replica
+    assertThat(tracker.countCommand("GET")).isGreaterThan(0);
+}
+```
+
+**Features:**
+- ✅ Annotation-driven (`@RedisStandalone`, `@RedisSentinel`)
+- ✅ Auto-configuration (Spring Boot properties)
+- ✅ Command tracking (verify routing decisions)
+- ✅ Platform-aware (auto-skips on macOS/Windows for Sentinel)
+- ✅ Zero duplication (centralized in `redis-laned-test-utils`)
+
+**Full Documentation:** [docs/TESTING.md](docs/TESTING.md)
+
+---
+
 ## Metrics (Optional)
 
 **⚠️ Metrics are COMPLETELY OPTIONAL.** Core library works standalone with zero overhead.
@@ -2290,13 +2358,89 @@ private int selectLane(int numLanes) {
 
 **Caveat:** Requires even thread distribution. With 200 threads + 8 lanes → ~25 threads/lane (load concentration). With 8 threads + 8 lanes → 1:1 mapping (perfect isolation). Works best when `numThreads ≤ 2 × numLanes`.
 
-**⚠️ Transaction Safety:** Collision rate = `1 - e^(-n²/2m)` where n=threads, m=lanes. At n=m=50: ~39% collision probability. At n=m=2500: ~63% collision probability. Use `numLanes ≥ numThreads` for guaranteed transaction safety, or use dedicated connection pool (`shareNativeConnection: false`).
+**⚠️ Transaction Safety:** Collision rate = `1 - e^(-n²/2m)` where n=threads, m=lanes. At n=7, m=50: ~39% collision. At n=50, m=50: ~100% collision (guaranteed). At n=50, m=200: ~12% collision. Use `numLanes ≥ numThreads` for safe transactions, or dedicated pool (`shareNativeConnection: false`).
 
 ---
 
-## 📋 Planned Strategies
+## Lane Selection Strategies
 
-### `KEY_AFFINITY` (MurmurHash3)
+### ✅ `ROUND_ROBIN` (Default)
+
+**Status:** ✅ Production-ready (v1.0.0)
+
+Lock-free atomic counter with CAS. Uniform distribution across lanes.
+
+```java
+public int selectLane(final int numLanes) {
+    return (counter.getAndIncrement() & Integer.MAX_VALUE) % numLanes;
+}
+```
+
+**Dispatch cost:** O(1), 1 CAS (~5-20ns uncontended, ~150-500ns high contention)  
+**Distribution:** Uniform (each lane gets ~1/N traffic)  
+**Contention:** Low (atomic counter shared across threads)
+
+**Best for:** Default choice, uniform workloads, predictable distribution
+
+---
+
+### ✅ `LEAST_USED` (Load-Aware)
+
+**Status:** ✅ Production-ready (v1.0.0)
+
+Scans all lanes, selects lane with minimum in-flight commands. Real-time load balancing.
+
+```java
+public int selectLane(final int numLanes) {
+    int minLane = 0;
+    int minCount = lanes[0].getInFlightCount().get();
+    for (int i = 1; i < numLanes; i++) {
+        int count = lanes[i].getInFlightCount().get();
+        if (count < minCount) {
+            minCount = count;
+            minLane = i;
+        }
+    }
+    return minLane;
+}
+```
+
+**Dispatch cost:** O(N) scan (~40-80ns for N=8, ~160-320ns for N=32)  
+**Distribution:** Load-proportional (avoids busy lanes, prefers idle lanes)  
+**Contention:** None (lock-free volatile reads)
+
+**Why it helps:** Avoids queuing behind slow commands. If lane 3 is processing slow `HGETALL` (18ms), new commands route to idle lanes.
+
+**Best for:** Mixed fast/slow commands, unpredictable workloads, HOL reduction
+
+---
+
+### ✅ `THREAD_AFFINITY` (Thread-Sticky)
+
+**Status:** ✅ Production-ready (v1.0.0)
+
+Hash thread ID to lane. Same thread → same lane (deterministic affinity).
+
+```java
+public int selectLane(final int numLanes) {
+    long threadId = Thread.currentThread().threadId();
+    return (int) (MurmurHash3.hash(threadId) % numLanes);
+}
+```
+
+**Dispatch cost:** O(1), MurmurHash3 (~12-16ns)  
+**Distribution:** Uniform (if threads uniformly distributed)  
+**Contention:** None (stateless, no shared state)
+
+**Why it helps:**
+- **Transaction safety:** Same thread → same lane → `WATCH` + `MULTI` + `EXEC` guaranteed same connection
+- **Cache locality:** Same thread likely accesses same keys → same lane → better Redis cache hit rate
+
+**Best for:** Thread-per-request models, transactional workloads, Spring MVC (servlet threads)
+
+---
+
+### 📋 `KEY_AFFINITY` (MurmurHash3)
 
 **Status:** 📋 Planned (future release)
 
@@ -2377,21 +2521,20 @@ Lane 3: EMA latency = 0.5ms         → weight 0.67  → 67% traffic
 
 ### Strategy Comparison
 
-| Strategy         | Status | Dispatch Cost            | Contention | Best For                             |
-|------------------|--------|--------------------------|------------|--------------------------------------|
-| `ROUND_ROBIN`    | ✅ v1.0 | O(1), 1 CAS (~20ns)      | Low        | Default, uniform workloads           |
-| `LEAST_USED`     | ✅ v1.0 | O(N) scan (~50-100ns)    | None       | Mixed fast/slow commands             |
-| `THREAD_BASED`   | ✅ v1.0 | O(1), hash (~30ns)       | None       | Transactional, thread-per-request    |
-| `KEY_AFFINITY`   | 📋 Planned | O(key len) (~50-200ns)   | None       | Key-isolated, multi-tenant           |
-| `RANDOM`         | 📋 Planned | O(1), no CAS (~10ns)     | None       | Extreme concurrency (10K+ threads)   |
-| `ADAPTIVE`       | 📋 Planned | O(N) weighted (~200ns)   | None       | Mixed SLO, self-optimizing           |
-| `THREAD_STICKY` | O(1) ThreadLocal           | None         | Thread-per-request, low thread count   |
+| Strategy           | Status      | Dispatch Cost          | Contention | Best For                           |
+|--------------------|-------------|------------------------|------------|------------------------------------|
+| `ROUND_ROBIN`      | ✅ v1.0     | O(1), 1 CAS (~20ns)    | Low        | Default, uniform workloads         |
+| `LEAST_USED`       | ✅ v1.0     | O(N) scan (~50-100ns)  | None       | Mixed fast/slow commands           |
+| `THREAD_AFFINITY`  | ✅ v1.0     | O(1), hash (~15ns)     | None       | Transactional, thread-per-request  |
+| `KEY_AFFINITY`     | 📋 Planned  | O(key len) (~50-200ns) | None       | Key-isolated, multi-tenant         |
+| `RANDOM`           | 📋 Planned  | O(1), no CAS (~10ns)   | None       | Extreme concurrency (10K+ threads) |
+| `ADAPTIVE`         | 📋 Planned  | O(N) weighted (~200ns) | None       | Mixed SLO, self-optimizing         |
 
 ---
 
 ## ⚠️ Transaction Safety (MULTI/EXEC)
 
-**RESP stores transaction state per-connection (`client->flags`, `client->mstate`), not per-request. Concurrent MULTI on shared connection clobbers state. ThreadAffinity maps thread→lane via MurmurHash3 but doesn't prevent collision (pigeonhole: n threads, m lanes, n>m). Birthday paradox: n=m=2500 → 63% ≥1 collision → 34% threads share connection → MULTI/EXEC fails (`EXEC without MULTI`, cross-thread command execution).** Lettuce explicitly forbids MULTI/EXEC on shared connections. Not a bug—RESP protocol constraint. **Solution:** dedicated pool (`shareNativeConnection: false`) or Lua scripts (atomic, no MULTI needed). See [Transaction Safety Deep Dive](docs/TRANSACTION_SAFETY_DEEP_DIVE.md) (Redis `multi.c` analysis, Netty internals, collision math) and [Lane Selection Strategies](docs/LANE_SELECTION_STRATEGIES.md) (production configs, `shareNativeConnection` behavior, architectural trade-offs).
+**RESP stores transaction state per-connection (`client->flags`, `client->mstate`), not per-request. Concurrent MULTI on shared connection clobbers state. ThreadAffinity maps thread→lane via MurmurHash3 but doesn't prevent collision (pigeonhole: n threads, m lanes, n>m). Birthday paradox: n=50, m=50 → ~100% collision; n=50, m=200 → ~12% collision → some threads share lanes → MULTI/EXEC fails (`EXEC without MULTI`, cross-thread command execution).** Lettuce explicitly forbids MULTI/EXEC on shared connections. Not a bug—RESP protocol constraint. **Solution:** dedicated pool (`shareNativeConnection: false`) or Lua scripts (atomic, no MULTI needed). See [Transaction Safety Deep Dive](docs/TRANSACTION_SAFETY_DEEP_DIVE.md) (Redis `multi.c` analysis, Netty internals, collision math) and [Lane Selection Strategies](docs/LANE_SELECTION_STRATEGIES.md) (production configs, `shareNativeConnection` behavior, architectural trade-offs).
 
 ---
 

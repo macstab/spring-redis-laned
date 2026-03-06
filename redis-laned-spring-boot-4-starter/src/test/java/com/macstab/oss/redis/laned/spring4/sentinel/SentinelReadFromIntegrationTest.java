@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -21,6 +19,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.macstab.oss.redis.laned.spring4.testconfig.TestApplication;
 import com.macstab.oss.redis.laned.test.annotation.RedisSentinel;
+import com.macstab.oss.redis.laned.test.util.RedisCommandTracker;
 
 /**
  * Integration test for Sentinel read-from-replica routing.
@@ -62,13 +61,16 @@ import com.macstab.oss.redis.laned.test.annotation.RedisSentinel;
 @RedisSentinel(masterName = "mymaster", replicas = 2, sentinels = 3)
 class SentinelReadFromIntegrationTest {
 
-  private static com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension.SentinelCluster cluster;
+  private static com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension
+          .SentinelCluster
+      cluster;
 
   @Autowired private RedisTemplate<String, String> redisTemplate;
 
   @BeforeAll
   static void captureCluster(
-      final com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension.SentinelCluster injectedCluster) {
+      final com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension.SentinelCluster
+          injectedCluster) {
     cluster = injectedCluster;
   }
 
@@ -90,10 +92,14 @@ class SentinelReadFromIntegrationTest {
               assertThat(value).isEqualTo("value:99");
             });
 
-    // When: Start MONITOR on all nodes
-    final var masterMonitor = startMonitor(cluster.getMaster());
-    final var replica1Monitor = startMonitor(cluster.getReplicas().get(0));
-    final var replica2Monitor = startMonitor(cluster.getReplicas().get(1));
+    // When: Start command tracking on all nodes
+    final var masterMonitor = new RedisCommandTracker(cluster.getMaster());
+    final var replica1Monitor = new RedisCommandTracker(cluster.getReplicas().get(0));
+    final var replica2Monitor = new RedisCommandTracker(cluster.getReplicas().get(1));
+
+    masterMonitor.start();
+    replica1Monitor.start();
+    replica2Monitor.start();
 
     // Execute reads
     for (int i = 0; i < 1000; i++) {
@@ -135,10 +141,14 @@ class SentinelReadFromIntegrationTest {
   @Test
   @DisplayName("Should route all writes to master")
   void writesGoToMaster() throws Exception {
-    // When: Start MONITOR
-    final var masterMonitor = startMonitor(cluster.getMaster());
-    final var replica1Monitor = startMonitor(cluster.getReplicas().get(0));
-    final var replica2Monitor = startMonitor(cluster.getReplicas().get(1));
+    // When: Start command tracking
+    final var masterMonitor = new RedisCommandTracker(cluster.getMaster());
+    final var replica1Monitor = new RedisCommandTracker(cluster.getReplicas().get(0));
+    final var replica2Monitor = new RedisCommandTracker(cluster.getReplicas().get(1));
+
+    masterMonitor.start();
+    replica1Monitor.start();
+    replica2Monitor.start();
 
     // Execute writes
     for (int i = 0; i < 100; i++) {
@@ -166,102 +176,6 @@ class SentinelReadFromIntegrationTest {
     assertThat(replica1Sets + replica2Sets)
         .as("Replicas should NEVER receive SET commands (read-only)")
         .isEqualTo(0);
-  }
-
-  /**
-   * Starts Redis MONITOR in background thread.
-   *
-   * @param container Redis container
-   * @return MonitorSession
-   */
-  private MonitorSession startMonitor(
-      final org.testcontainers.containers.GenericContainer<?> container) {
-    final var session = new MonitorSession(container);
-    session.start();
-    return session;
-  }
-
-  /**
-   * Background thread that runs {@code redis-cli MONITOR} and captures output.
-   *
-   * <p><strong>Filtering:</strong> Excludes replication traffic (source port :6379).
-   */
-  private static class MonitorSession {
-    private final org.testcontainers.containers.GenericContainer<?> container;
-    private final List<String> commands = new ArrayList<>();
-    private Thread thread;
-    private volatile boolean running = false;
-
-    MonitorSession(final org.testcontainers.containers.GenericContainer<?> container) {
-      this.container = container;
-    }
-
-    void start() {
-      running = true;
-      thread =
-          new Thread(
-              () -> {
-                try {
-                  final var exec =
-                      container
-                          .getDockerClient()
-                          .execCreateCmd(container.getContainerId())
-                          .withCmd("redis-cli", "MONITOR")
-                          .withAttachStdout(true)
-                          .withAttachStderr(true)
-                          .exec();
-
-                  final var execId = exec.getId();
-                  container
-                      .getDockerClient()
-                      .execStartCmd(execId)
-                      .exec(
-                          new com.github.dockerjava.api.async.ResultCallback.Adapter<
-                              com.github.dockerjava.api.model.Frame>() {
-                            @Override
-                            public void onNext(com.github.dockerjava.api.model.Frame frame) {
-                              if (running) {
-                                final var line = new String(frame.getPayload()).trim();
-                                // Filter out replication traffic (source port :6379)
-                                // Client: [0 172.17.0.1:54321] "GET" ✅
-                                // Replication: [0 172.18.0.2:6379] "SET" ❌
-                                if ((line.contains("\"GET\"") || line.contains("\"SET\""))
-                                    && !line.contains(":6379]")) {
-                                  synchronized (commands) {
-                                    commands.add(line);
-                                  }
-                                }
-                              }
-                            }
-                          })
-                      .awaitStarted();
-                } catch (Exception e) {
-                  e.printStackTrace();
-                }
-              });
-      thread.setDaemon(true);
-      thread.start();
-
-      // Wait for MONITOR to start
-      try {
-        Thread.sleep(500);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-    }
-
-    void stop() {
-      running = false;
-      if (thread != null) {
-        thread.interrupt();
-      }
-    }
-
-    long countCommand(final String command) {
-      synchronized (commands) {
-        return commands.stream().filter(line -> line.contains("\"" + command + "\"")).count();
-      }
-    }
   }
 
   /** Test configuration. */

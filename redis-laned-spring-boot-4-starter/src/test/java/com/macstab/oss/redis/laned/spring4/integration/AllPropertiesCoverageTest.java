@@ -21,7 +21,7 @@ import org.testcontainers.containers.GenericContainer;
 
 import com.macstab.oss.redis.laned.spring4.LanedLettuceConnectionFactory;
 import com.macstab.oss.redis.laned.spring4.testconfig.TestApplication;
-import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
+import com.macstab.oss.redis.laned.test.factory.RedisContainerFactory;
 
 /**
  * Integration tests proving 100% coverage of all Spring Boot Redis properties.
@@ -44,7 +44,7 @@ class AllPropertiesCoverageTest {
 
   @BeforeAll
   static void startRedis() {
-    redis = RedisTestContainers.createStandalone();
+    redis = RedisContainerFactory.createStandalone();
     redis.start();
   }
 

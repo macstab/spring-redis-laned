@@ -1,7 +1,6 @@
 /* (C)2026 Christian Schnapka / Macstab GmbH */
 package com.macstab.oss.redis.laned.test.extension;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -10,9 +9,9 @@ import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
-import org.testcontainers.utility.DockerImageName;
 
 import com.macstab.oss.redis.laned.test.annotation.RedisSentinel;
+import com.macstab.oss.redis.laned.test.factory.RedisContainerFactory;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -50,15 +49,19 @@ import lombok.extern.slf4j.Slf4j;
  * @author Christian Schnapka - Macstab GmbH
  */
 @Slf4j
-public final class SentinelContainerExtension implements BeforeAllCallback, AfterAllCallback, org.junit.jupiter.api.extension.ParameterResolver {
+public final class SentinelContainerExtension
+    implements BeforeAllCallback,
+        AfterAllCallback,
+        org.junit.jupiter.api.extension.ParameterResolver {
 
   private static final ExtensionContext.Namespace NAMESPACE =
       ExtensionContext.Namespace.create(SentinelContainerExtension.class);
 
   private static final String CLUSTER_KEY = "sentinel-cluster";
-  
+
   /**
-   * System property key for sentinel nodes (for Spring @TestPropertySource / @DynamicPropertySource).
+   * System property key for sentinel nodes (for Spring @TestPropertySource
+   * / @DynamicPropertySource).
    */
   public static final String SENTINEL_NODES_PROPERTY = "sentinel.nodes";
 
@@ -84,8 +87,12 @@ public final class SentinelContainerExtension implements BeforeAllCallback, Afte
     final var cluster = createCluster(annotation);
     cluster.start();
 
-    // Expose sentinel nodes as system property for Spring Boot @TestPropertySource / @DynamicPropertySource
-    final var sentinelNodes = cluster.getSentinels().get(0).getHost() + ":" + cluster.getSentinels().get(0).getMappedPort(26379);
+    // Expose sentinel nodes as system property for Spring Boot @TestPropertySource /
+    // @DynamicPropertySource
+    final var sentinelNodes =
+        cluster.getSentinels().get(0).getHost()
+            + ":"
+            + cluster.getSentinels().get(0).getMappedPort(26379);
     System.setProperty(SENTINEL_NODES_PROPERTY, sentinelNodes);
 
     log.info(
@@ -126,54 +133,22 @@ public final class SentinelContainerExtension implements BeforeAllCallback, Afte
   /**
    * Create full Sentinel cluster from annotation.
    *
-   * @param annotation configuration
+   * <p><strong>Delegation:</strong> Uses {@link RedisContainerFactory#createSentinelCluster()} to
+   * create the cluster, then wraps it in the extension's SentinelCluster holder.
+   *
+   * @param annotation configuration (currently ignored, uses factory defaults)
    * @return cluster (not started)
    */
   private SentinelCluster createCluster(final RedisSentinel annotation) {
-    final var network = Network.newNetwork();
-    final var image = DockerImageName.parse("redis:" + annotation.version());
+    // Delegate to centralized factory
+    final var factoryCluster = RedisContainerFactory.createSentinelCluster();
 
-    // 1. Master
-    final var master =
-        new GenericContainer<>(image)
-            .withNetwork(network)
-            .withNetworkAliases("redis-master")
-            .withExposedPorts(6379)
-            .withCommand("redis-server");
-
-    // 2. Replicas
-    final var replicas = new ArrayList<GenericContainer<?>>();
-    for (int i = 1; i <= annotation.replicas(); i++) {
-      final var replica =
-          new GenericContainer<>(image)
-              .withNetwork(network)
-              .withNetworkAliases("redis-replica-" + i)
-              .withExposedPorts(6379)
-              .withCommand("redis-server", "--replicaof", "redis-master", "6379");
-      replicas.add(replica);
-    }
-
-    // 3. Sentinels
-    final var sentinels = new ArrayList<GenericContainer<?>>();
-    for (int i = 1; i <= annotation.sentinels(); i++) {
-      final var sentinel =
-          new GenericContainer<>(image)
-              .withNetwork(network)
-              .withNetworkAliases("redis-sentinel-" + i)
-              .withExposedPorts(26379)
-              .withCommand(
-                  "redis-sentinel",
-                  "/etc/redis/sentinel.conf",
-                  "--sentinel",
-                  "monitor",
-                  annotation.masterName(),
-                  "redis-master",
-                  "6379",
-                  String.valueOf(annotation.quorum()));
-      sentinels.add(sentinel);
-    }
-
-    return new SentinelCluster(network, master, replicas, sentinels, annotation.masterName());
+    return new SentinelCluster(
+        factoryCluster.network(),
+        factoryCluster.master(),
+        factoryCluster.replicas(),
+        factoryCluster.sentinels(),
+        annotation.masterName());
   }
 
   /**
