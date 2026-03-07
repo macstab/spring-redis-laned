@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import com.macstab.oss.redis.laned.connection.SentinelTopology;
 import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
+import com.macstab.oss.redis.laned.strategy.KeyAffinityStrategy;
 import com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy;
 import com.macstab.oss.redis.laned.strategy.RoundRobinStrategy;
 
@@ -73,6 +74,15 @@ public final class LanedConnectionManager {
   private final Optional<ReadFrom> readFrom;
   private final Optional<SentinelTopology> sentinelTopology;
   private volatile boolean destroyed;
+
+  /**
+   * Shared RoundRobinStrategy for KeyAffinity fallback (keyless commands).
+   *
+   * <p>KeyAffinityStrategy uses this for commands without keys (PING, INFO, CLIENT*). Shared across
+   * all KeyAffinityConnectionWrapper instances to ensure true round-robin distribution (counter
+   * increments across all wrappers, not per-wrapper). Thread-safe via AtomicInteger.
+   */
+  private final RoundRobinStrategy roundRobinFallback;
 
   /**
    * Creates manager with default round-robin strategy.
@@ -245,6 +255,7 @@ public final class LanedConnectionManager {
     this.readFrom = readFrom;
     this.sentinelTopology = sentinelTopology;
     this.destroyed = false;
+    this.roundRobinFallback = new RoundRobinStrategy();
 
     configureClientOptions();
     initializeLanes();
@@ -294,7 +305,20 @@ public final class LanedConnectionManager {
   public StatefulRedisConnection<?, ?> getConnection() {
     checkNotDestroyed();
 
-    // Strategy selects lane (algorithm-specific logic)
+    // KeyAffinityStrategy requires lazy lane selection (key not available until first command)
+    if (strategy instanceof KeyAffinityStrategy) {
+      // Return wrapper with dynamic proxy (selects lane on first command)
+      // Pass shared fallback + metrics for proper distribution tracking
+      return new KeyAffinityConnectionWrapper<>(
+          this,
+          (KeyAffinityStrategy) strategy,
+          numLanes,
+          roundRobinFallback,
+          metrics,
+          connectionName);
+    }
+
+    // Standard strategies: select lane eagerly (upfront, before returning connection)
     final var laneIndex = strategy.selectLane(numLanes);
 
     // Record lane selection (dimensional metrics)
