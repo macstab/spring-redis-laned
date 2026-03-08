@@ -421,7 +421,7 @@ class KeyAffinityConnectionWrapperIntegrationTest {
   }
 
   @Nested
-  @DisplayName("Concurrent Keyless Commands (Distinguished+ Level)")
+  @DisplayName("Concurrent Keyless Commands")
   class ConcurrentKeylessCommandsDistinguishedLevel {
 
     @Test

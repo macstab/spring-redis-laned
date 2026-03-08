@@ -1,6 +1,6 @@
 # Lane Selection Strategies
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 
 
 The laned connection provider supports multiple dispatch strategies. Round-robin is the current implementation. All other strategies are planned enhancements.
@@ -15,11 +15,11 @@ All strategies share the same lane infrastructure — only the dispatch logic ch
 * [Lane Selection Strategies](#lane-selection-strategies)
   * [Table of Contents](#table-of-contents)
   * [Current: `ROUND_ROBIN` ✅](#current-round_robin-)
-  * [Current : `LEAST_USED`](#planned-least_used)
-  * [Planned: `KEY_AFFINITY` (MurmurHash3)](#planned-key_affinity-murmurhash3)
+  * [Current: `LEAST_USED`](#planned-least_used)
+  * [✅ Implemented: `KEY_AFFINITY` (MurmurHash3)](#-implemented-key_affinity-murmurhash3)
+  * [Current: `THREAD_STICKY`](#planned-thread_sticky)
   * [Planned: `RANDOM`](#planned-random)
   * [Planned: `ADAPTIVE` (Latency-Weighted)](#planned-adaptive-latency-weighted)
-  * [Current: `THREAD_STICKY`](#planned-thread_sticky)
   * [Strategy Comparison](#strategy-comparison)
   * [⚠️ Transaction Safety Warning](#-transaction-safety-warning)
     * [Technical Root Cause](#technical-root-cause)
@@ -94,7 +94,7 @@ Lane 3: pending=2
 
 ---
 
-## Planned: `KEY_AFFINITY` (MurmurHash3)
+## ✅ Implemented: `KEY_AFFINITY` (MurmurHash3)
 
 Route commands by key: `MurmurHash3(keyBytes) % N`. The same key always maps to the same lane.
 
@@ -192,7 +192,7 @@ New commands are dispatched via weighted random selection — fast lanes get pro
 
 **Why it helps:** Round-robin and `LEAST_USED` react to the current queue depth. `ADAPTIVE` reacts to observed latency — a more direct signal of HOL severity. A lane with one slow command but 0 pending count (command in progress, decode not complete) looks empty to `LEAST_USED` but looks slow to `ADAPTIVE`.
 
-**Implementation complexity:** Highest of all strategies. Planned for a later milestone after `LEAST_USED` and `KEY_AFFINITY` are validated in production.
+**Implementation complexity:** Highest of all strategies. Planned for a later milestone after production validation.
 
 ---
 

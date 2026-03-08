@@ -93,10 +93,10 @@ import lombok.experimental.FieldDefaults;
  * calls). Escape analysis eliminates temporary allocations. Result: ~5-10ns overhead (negligible
  * compared to Redis network latency ~200-500μs).
  *
- * <p><strong>Per's note:</strong> I was skeptical about dynamic proxy (remembered JDK 1.5
- * performance), but profiling on JDK 21 showed &lt;10ns overhead after warmup. The JIT is insanely
- * good now. For comparison: round-robin CAS ~20ns, key hashing ~50-200ns, network RTT ~200,000ns.
- * Proxy overhead is 0.005% of total latency. Totally acceptable.
+ * <p><strong>Christian's note:</strong> I was skeptical about dynamic proxy (JDK 1.5 performance up
+ * to 1.9 was horrible), but profiling on JDK 21 showed &lt;10ns overhead after warmup. The JIT is
+ * insanely good now. For comparison: round-robin CAS ~20ns, key hashing ~50-200ns, network RTT
+ * ~200,000ns. Proxy overhead is 0.005% of total latency. Totally acceptable.
  *
  * <p><strong>Keyless command handling (PING, INFO, CLIENT*):</strong>
  *

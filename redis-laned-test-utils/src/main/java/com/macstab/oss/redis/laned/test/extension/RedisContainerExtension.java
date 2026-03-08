@@ -107,8 +107,8 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
    * Stop Redis container after all tests (automatic via Testcontainers AutoCloseable).
    *
    * <p><strong>Defensive Cleanup:</strong> ThreadLocal cleanup happens via both {@link
-   * ThreadLocalCleanup#close()} (primary, automatic) and manual removal here (backup). This
-   * "belt and suspenders" approach ensures no leaks even if JUnit lifecycle is interrupted.
+   * ThreadLocalCleanup#close()} (primary, automatic) and manual removal here (backup). This "belt
+   * and suspenders" approach ensures no leaks even if JUnit lifecycle is interrupted.
    *
    * @param context test context
    */
@@ -239,8 +239,8 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
   /**
    * ThreadLocal cleanup wrapper for automatic resource management.
    *
-   * <p>Implements {@link ExtensionContext.Store.CloseableResource} to ensure ThreadLocal is
-   * cleaned up automatically by JUnit 5 (primary mechanism). Manual cleanup in {@link
+   * <p>Implements {@link ExtensionContext.Store.CloseableResource} to ensure ThreadLocal is cleaned
+   * up automatically by JUnit 5 (primary mechanism). Manual cleanup in {@link
    * #afterAll(ExtensionContext)} serves as defensive backup.
    *
    * <p><strong>Defensive Design:</strong> Both automatic and manual cleanup ensure no ThreadLocal

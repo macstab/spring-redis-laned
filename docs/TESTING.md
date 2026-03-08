@@ -1,6 +1,6 @@
 # Testing Guide - redis-laned-test-utils
 
-> **Distinguished-Level Test Infrastructure** for Redis integration testing
+> **Test Infrastructure** for Redis integration testing
 
 ---
 
@@ -34,7 +34,7 @@ redis-laned-test-utils/
 
 1. **Annotation-Driven**: Prefer `@RedisStandalone`/`@RedisSentinel` over manual setup
 2. **Zero Duplication**: Centralized in `redis-laned-test-utils`
-3. **Production Quality**: Thread-safe, properly documented, Distinguished-level code
+3. **Production Quality**: Thread-safe, properly documented
 4. **Best Practices**: JUnit 5, Testcontainers, AAA pattern
 
 ---
@@ -576,4 +576,4 @@ jobs:
 
 ---
 
-_Last Updated: 2026-03-06 | Author: Christian Schnapka - Macstab GmbH_
+_Last Updated: 2026-03-06 | Author: Christian Schnapka / Embedded Principal+ Engineer - Macstab GmbH_

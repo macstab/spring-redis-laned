@@ -50,8 +50,8 @@ package com.macstab.oss.redis.laned.util;
  *       (&gt;2^32 buckets).
  * </ul>
  *
- * <p><strong>Per's note:</strong> I initially used CRC16 (standard in Redis Cluster), but profiling
- * showed it was 3-5× slower than MurmurHash3. The loop over bytes adds up at millions of
+ * <p><strong>Christian's note:</strong> I initially used CRC16 (standard in Redis Cluster), but
+ * profiling showed it was 3-5× slower than MurmurHash3. The loop over bytes adds up at millions of
  * requests/sec. MurmurHash3's operations are branch-free, pipeline-friendly, and the JIT compiles
  * them to ~6-8 x86 instructions. In production at Macstab, this saved ~25ns per request in the hot
  * path.

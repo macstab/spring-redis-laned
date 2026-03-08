@@ -94,7 +94,7 @@ round-robin dispatched. One dependency, two config lines. Done.
   * [Why This Works: The Connection Budget Argument](#why-this-works-the-connection-budget-argument)
   * [Roadmap - Lane Selection Strategies](#roadmap---lane-selection-strategies)
     * [Planned: `LEAST_USED`](#planned-least_used)
-    * [Planned: `KEY_AFFINITY` (MurmurHash3)](#planned-key_affinity-murmurhash3)
+    * [✅ Implemented: `KEY_AFFINITY` (MurmurHash3)](#-implemented-key_affinity-murmurhash3)
     * [Planned: `RANDOM`](#planned-random)
     * [Planned: `ADAPTIVE` (Latency-Weighted)](#planned-adaptive-latency-weighted)
     * [Planned: `THREAD_STICKY`](#planned-thread_sticky)
@@ -140,6 +140,15 @@ Thread 4 → Lane 3 → GET (1ms)       ━━ DONE! (no blocking)
 **Optimal Configuration:** 4-8 lanes for 90% of workloads (highest ROI, minimal overhead)
 
 **Full Analysis:** [Performance Benchmarks](docs/REDIS_LANED_PERFORMANCE_BENCHMARKS.md) | **Visualizations:** Upload [results.json](redis-laned-benchmarks/build/reports/jmh/results.json) to https://jmh.morethan.io
+
+---
+
+## 📚 Documentation
+
+- **[Testing Infrastructure](docs/TEST_UTILS.md)** — Complete test framework reference (12,500 words, principal+ level)
+- **[Configuration Guide](#configuration)** — All properties, TLS, Sentinel, Cluster
+- **[Architecture Deep Dive](#architecture)** — How multi-lane works (first principles)
+- **[Trade-offs](#trade-offs---what-this-actually-costs)** — What you're paying for performance
 
 ---
 
@@ -466,7 +475,7 @@ lane = (counter.getAndIncrement() & 0x7FFF_FFFF) % numLanes;  // Lock-free CAS, 
 
 **Patterns applied:**
 - **Factory Method:** `LanedLettuceConnectionFactory` creates topology-specific lane arrays
-- **Strategy:** Round-robin dispatch (future: `KEY_AFFINITY`, `LEAST_USED`, `ADAPTIVE`)
+- **Strategy:** Pluggable lane selection (`ROUND_ROBIN`, `THREAD_AFFINITY`, `LEAST_USED`, `KEY_AFFINITY`; future: `RANDOM`, `ADAPTIVE`)
 - **Adapter:** `LanedLettuceConnectionProvider` adapts Lettuce `RedisChannelWriter` to lane array
 
 ### When (Use Cases)
@@ -1791,71 +1800,165 @@ spring:
 
 ---
 
-## Testing
+## Testing Support
 
-**Distinguished-level test infrastructure** with Testcontainers support.
+Spring Redis Laned provides production-grade test infrastructure for declarative Redis integration testing with zero-config Sentinel clusters and network-level verification.
 
 ### Quick Start
 
 ```java
-@SpringBootTest
-@RedisStandalone  // Auto-starts Redis container
-class MyIntegrationTest {
-    
-    @Autowired
-    private RedisTemplate<String, String> redisTemplate;
-    
-    @Test
-    void testRedisOperations() {
-        redisTemplate.opsForValue().set("key", "value");
-        assertThat(redisTemplate.opsForValue().get("key"))
-            .isEqualTo("value");
-    }
-}
-```
-
-### Sentinel Cluster
-
-```java
+@RedisSentinel(replicas = 2, sentinels = 3)
 @SpringBootTest(properties = {
     "spring.data.redis.sentinel.master=mymaster",
     "spring.data.redis.sentinel.nodes=${sentinel.nodes}",
     "spring.data.redis.lettuce.read-from=REPLICA_PREFERRED"
 })
-@RedisSentinel(masterName = "mymaster", replicas = 2, sentinels = 3)
-class SentinelTest {
-    // Full cluster: 1 master + 2 replicas + 3 sentinels
-    // Auto-configured, no manual setup
+class SentinelIntegrationTest {
+    
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+    
+    @Test
+    void testReplicaReads() {
+        // Write to master
+        redisTemplate.opsForValue().set("key", "value");
+        
+        // Read from replica (automatic routing)
+        assertThat(redisTemplate.opsForValue().get("key")).isEqualTo("value");
+    }
 }
 ```
 
-### Command Tracking (Verify Routing)
+**One annotation starts:** 1 master + 2 replicas + 3 Sentinel monitors with automatic quorum configuration.
+
+### Key Features
+
+✅ **Zero-config orchestration** — `@RedisSentinel` replaces 50+ lines of Testcontainers setup  
+✅ **Network verification** — `RedisCommandTracker` proves routing correctness (reads → replicas, writes → master)  
+✅ **Platform-aware execution** — Auto-skip on macOS/Windows (Docker networking limitations)  
+✅ **Production-realistic** — Handles replication lag, Sentinel quorum, failover scenarios
+
+### Standalone Redis
+
+For simple tests without Sentinel:
+
+```java
+@RedisStandalone
+@SpringBootTest(properties = {
+    "spring.data.redis.host=${redis.host}",
+    "spring.data.redis.port=${redis.port}"
+})
+class StandaloneTest {
+    @Test
+    void testBasicOperations() {
+        // Test code here
+    }
+}
+```
+
+Works on **all platforms** (Linux, macOS, Windows) via port mapping.
+
+### Documentation
+
+📖 **[Complete Testing Reference](docs/TEST_UTILS.md)** — Architecture, Docker networking internals, JUnit 5 extension lifecycle, advanced patterns, troubleshooting (12,500 words, principal+ level)
+
+### Test Modules
+
+| Module | Purpose | Tests |
+|--------|---------|-------|
+| `redis-laned-test-utils` | Test annotations, JUnit extensions, utilities | 8 infrastructure files |
+| `redis-laned-core` | Integration + stress tests | 22 test files |
+| `redis-laned-spring-boot-3-starter` | Spring Boot 3 integration | 13 test files |
+| `redis-laned-spring-boot-4-starter` | Spring Boot 4 integration | 13 test files |
+
+### Installation
+
+**Maven:**
+
+```xml
+<dependency>
+    <groupId>com.macstab.oss</groupId>
+    <artifactId>redis-laned-test-utils</artifactId>
+    <version>${redis-laned.version}</version>
+    <scope>test</scope>
+</dependency>
+```
+
+**Gradle (Kotlin DSL):**
+
+```kotlin
+testImplementation("com.macstab.oss:redis-laned-test-utils:${redisLanedVersion}")
+```
+
+**Gradle (Groovy DSL):**
+
+```groovy
+testImplementation 'com.macstab.oss:redis-laned-test-utils:${redisLanedVersion}'
+```
+
+### Advanced Usage
+
+**Network Verification (Prove Routing):**
 
 ```java
 @Test
-void verifyReplicaReads() {
-    // Track commands on replica
-    RedisCommandTracker tracker = new RedisCommandTracker(replicaContainer);
-    tracker.start();
+void verifyReplicaRouting(SentinelCluster cluster) throws Exception {
+    // Track commands on master + replicas
+    RedisCommandTracker masterTracker = new RedisCommandTracker(cluster.getMasterContainer());
+    RedisCommandTracker replicaTracker = new RedisCommandTracker(cluster.getReplicaContainers().get(0));
     
-    // Execute reads
-    redisTemplate.opsForValue().get("key");
+    masterTracker.start();
+    replicaTracker.start();
     
-    tracker.stop();
+    // Execute 1000 reads
+    for (int i = 0; i < 1000; i++) {
+        redisTemplate.opsForValue().get("key:" + i);
+    }
     
-    // Verify reads went to replica
-    assertThat(tracker.countCommand("GET")).isGreaterThan(0);
+    masterTracker.stop();
+    replicaTracker.stop();
+    
+    // Verify reads went to replica (not master)
+    long masterReads = masterTracker.countCommand("GET");
+    long replicaReads = replicaTracker.countCommand("GET");
+    
+    assertThat(replicaReads).isGreaterThan(masterReads * 4); // 80%+ on replica
 }
 ```
 
-**Features:**
-- ✅ Annotation-driven (`@RedisStandalone`, `@RedisSentinel`)
-- ✅ Auto-configuration (Spring Boot properties)
-- ✅ Command tracking (verify routing decisions)
-- ✅ Platform-aware (auto-skips on macOS/Windows for Sentinel)
-- ✅ Zero duplication (centralized in `redis-laned-test-utils`)
+**Multi-Cluster Setup:**
 
-**Full Documentation:** [docs/TESTING.md](docs/TESTING.md)
+```java
+@RedisSentinel(id = "cluster-a", masterName = "master-a", replicas = 2, sentinels = 3)
+@RedisSentinel(id = "cluster-b", masterName = "master-b", replicas = 2, sentinels = 3)
+class MultiClusterTest {
+    @Test
+    void testIsolation() {
+        SentinelCluster clusterA = RedisSentinel.INSTANCE.get("cluster-a");
+        SentinelCluster clusterB = RedisSentinel.INSTANCE.get("cluster-b");
+        
+        // Both clusters running independently
+    }
+}
+```
+
+### Platform Requirements
+
+| Platform                 | `@RedisStandalone`   | `@RedisSentinel`  | Reason                                      |
+|--------------------------|----------------------|-------------------|---------------------------------------------|
+| **Linux host**           | ✅                    | ✅                 | Native Docker networking                    |
+| **Linux container (CI)** | ✅                    | ✅                 | Container-in-container supported            |
+| **macOS host**           | ✅                    | ❌                 | Docker Desktop VM breaks Sentinel discovery |
+| **Windows host**         | ✅                    | ❌                 | Docker Desktop VM breaks Sentinel discovery |
+
+**Sentinel tests auto-skip on incompatible platforms** (no manual configuration needed).
+
+### Learn More
+
+- 📖 [Architecture & Design](docs/TEST_UTILS.md#architecture-philosophy) — Why multi-lane + test infrastructure
+- 🔧 [Annotation Reference](docs/TEST_UTILS.md#annotation-framework) — Complete API docs
+- 🐛 [Troubleshooting](docs/TEST_UTILS.md#troubleshooting--diagnostics) — Common issues + solutions
+- 🚀 [Advanced Patterns](docs/TEST_UTILS.md#advanced-patterns) — Multi-cluster, chaos engineering
 
 ---
 
@@ -2440,9 +2543,9 @@ public int selectLane(final int numLanes) {
 
 ---
 
-### 📋 `KEY_AFFINITY` (MurmurHash3)
+### ✅ Implemented: `KEY_AFFINITY` (MurmurHash3)
 
-**Status:** 📋 Planned (future release)
+**Status:** ✅ Implemented (v1.0+)
 
 Route commands by Redis key hash. Same key → same lane (key isolation + transaction safety).
 
@@ -2526,7 +2629,7 @@ Lane 3: EMA latency = 0.5ms         → weight 0.67  → 67% traffic
 | `ROUND_ROBIN`      | ✅ v1.0     | O(1), 1 CAS (~20ns)    | Low        | Default, uniform workloads         |
 | `LEAST_USED`       | ✅ v1.0     | O(N) scan (~50-100ns)  | None       | Mixed fast/slow commands           |
 | `THREAD_AFFINITY`  | ✅ v1.0     | O(1), hash (~15ns)     | None       | Transactional, thread-per-request  |
-| `KEY_AFFINITY`     | 📋 Planned  | O(key len) (~50-200ns) | None       | Key-isolated, multi-tenant         |
+| `KEY_AFFINITY`     | ✅ v1.0     | O(key len) (~50-200ns) | None       | Key-isolated, multi-tenant         |
 | `RANDOM`           | 📋 Planned  | O(1), no CAS (~10ns)   | None       | Extreme concurrency (10K+ threads) |
 | `ADAPTIVE`         | 📋 Planned  | O(N) weighted (~200ns) | None       | Mixed SLO, self-optimizing         |
 

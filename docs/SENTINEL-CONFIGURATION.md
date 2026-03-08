@@ -1,6 +1,6 @@
 # Redis Sentinel Configuration with spring-redis-laned
 
-**Author:** Christian Schnapka / Macstab GmbH  
+**Author:** Christian Schnapka / Embedded Principal+ Engineer - Macstab GmbH  
 **Version:** 1.0 (2026-03-02)  
 **Applies to:** spring-redis-laned 1.0.0+
 

@@ -39,6 +39,14 @@ class LaneSelectionStrategyTypeTest {
   }
 
   @Test
+  @DisplayName("KEY_AFFINITY creates KeyAffinityStrategy instance")
+  void keyAffinityCreatesCorrectStrategy() {
+    final var strategy = LaneSelectionStrategyType.KEY_AFFINITY.createStrategy();
+
+    assertThat(strategy).isInstanceOf(KeyAffinityStrategy.class);
+  }
+
+  @Test
   @DisplayName("All enum values have corresponding strategy implementations")
   void allEnumValuesHaveImplementations() {
     for (final var strategyType : LaneSelectionStrategyType.values()) {

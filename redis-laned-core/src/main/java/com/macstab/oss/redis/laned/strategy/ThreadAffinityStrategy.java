@@ -1,6 +1,8 @@
 /* (C)2026 Christian Schnapka / Macstab GmbH */
 package com.macstab.oss.redis.laned.strategy;
 
+import com.macstab.oss.redis.laned.util.MurmurHash3;
+
 /**
  * Thread-affinity lane selection (thread ID hash-based).
  *
@@ -9,7 +11,7 @@ package com.macstab.oss.redis.laned.strategy;
  * <p>Same thread → same thread ID → same MurmurHash3 → same lane (deterministic affinity). No
  * ThreadLocal storage, no cleanup required, zero memory overhead.
  *
- * <p>Per's note: I initially used ThreadLocal here (standard Java idiom), but hit a nasty
+ * <p>Christian's note: I initially used ThreadLocal here (standard Java idiom), but hit a nasty
  * ClassLoader leak in production at Macstab after a WAR redeploy. Worker threads kept references to
  * old Integer objects from the previous ClassLoader → 200MB leak per redeploy. Thread ID hashing is
  * stateless, zero overhead, and avoids the entire problem. Learned this the hard way.
@@ -246,8 +248,6 @@ package com.macstab.oss.redis.laned.strategy;
  *     ClassLoader leaks in servlet containers. Thread ID approach is stateless: no storage, no
  *     cleanup, no leak risk. Thread ID is JVM-managed, automatically reclaimed when thread dies.
  */
-import com.macstab.oss.redis.laned.util.MurmurHash3;
-
 public final class ThreadAffinityStrategy implements LaneSelectionStrategy {
 
   /**

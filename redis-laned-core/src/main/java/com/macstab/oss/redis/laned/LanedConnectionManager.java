@@ -39,7 +39,7 @@ import lombok.extern.slf4j.Slf4j;
  * <p>N lanes: slow command on lane K blocks only 1/N probability (strategy-dependent). N=8 with
  * round-robin → 87.5% HOL reduction.
  *
- * <p>Per's note: I spent 3 days profiling this at Macstab before I understood the root cause.
+ * <p>Christian's note: I spent 3 days profiling this at Macstab before I understood the root cause.
  * Everyone assumes it's Redis being slow, or the network, or Spring's pooling. But the profiler
  * showed threads parked in CompletableFuture.get() while Redis reported 3% CPU. The smoking gun was
  * CommandHandler.stack - 200+ commands queued behind a single slow HGETALL. Once you see it, the
@@ -73,7 +73,7 @@ public final class LanedConnectionManager {
   private final String connectionName;
   private final Optional<ReadFrom> readFrom;
   private final Optional<SentinelTopology> sentinelTopology;
-  private volatile boolean destroyed;
+  @Getter private volatile boolean destroyed;
 
   /**
    * Shared RoundRobinStrategy for KeyAffinity fallback (keyless commands).
@@ -435,18 +435,6 @@ public final class LanedConnectionManager {
     } catch (final Exception e) {
       log.error("Error during LanedConnectionManager destruction", e);
     }
-  }
-
-  /**
-   * Checks if manager has been destroyed.
-   *
-   * <p>Once destroyed, all {@code getConnection()} and {@code getPubSubConnection()} calls throw
-   * {@code IllegalStateException}. Lanes and Pub/Sub connections are closed, metrics removed.
-   *
-   * @return {@code true} if {@link #destroy()} has been called, {@code false} otherwise
-   */
-  public boolean isDestroyed() {
-    return destroyed;
   }
 
   // ==================== Private Methods ====================

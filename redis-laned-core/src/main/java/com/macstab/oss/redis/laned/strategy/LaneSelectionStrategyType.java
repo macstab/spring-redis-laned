@@ -35,6 +35,12 @@ package com.macstab.oss.redis.laned.strategy;
  *     <td>Dynamic load balancing</td>
  *     <td>Slight overhead (atomic reads)</td>
  *   </tr>
+ *   <tr>
+ *     <td>KEY_AFFINITY</td>
+ *     <td>Multi-tenant, key-isolated workloads</td>
+ *     <td>Same key always routed to same lane, zero cross-lane contention</td>
+ *     <td>Lazy initialization overhead (~200ns per wrapper)</td>
+ *   </tr>
  * </table>
  *
  * @author Christian Schnapka - Macstab GmbH
@@ -42,6 +48,7 @@ package com.macstab.oss.redis.laned.strategy;
  * @see RoundRobinStrategy
  * @see ThreadAffinityStrategy
  * @see LeastUsedStrategy
+ * @see KeyAffinityStrategy
  */
 public enum LaneSelectionStrategyType {
 
@@ -96,18 +103,62 @@ public enum LaneSelectionStrategyType {
    *
    * <p><strong>Adaptive</strong> - adjusts to actual load, best for heterogeneous workloads.
    */
-  LEAST_USED;
+  LEAST_USED,
+
+  /**
+   * Key affinity (same key always routes to same lane).
+   *
+   * <p><strong>How it works:</strong> Hashes Redis key with MurmurHash3, selects lane = hash %
+   * numLanes. Uses dynamic proxy to intercept commands and extract keys lazily.
+   *
+   * <p><strong>Use when:</strong>
+   *
+   * <ul>
+   *   <li>Multi-tenant workloads (tenant ID embedded in key)
+   *   <li>Key-isolated operations (same key accessed repeatedly)
+   *   <li>Transaction safety required (same key → same connection → safe MULTI/EXEC)
+   *   <li>Cache locality desired (same lane processes related keys)
+   * </ul>
+   *
+   * <p><strong>Implementation note:</strong> Unlike other strategies, lane selection is LAZY
+   * (happens on first command, not during {@code getConnection()}). This is because the Redis key
+   * is only available when the user calls {@code async().get(key)}, not when the connection is
+   * requested. Uses {@link com.macstab.oss.redis.laned.KeyAffinityConnectionWrapper} with dynamic
+   * proxy to intercept commands.
+   *
+   * <p><strong>Performance characteristics:</strong>
+   *
+   * <ul>
+   *   <li>Lane selection: O(key length) for hashing (~50-200ns for typical keys)
+   *   <li>Wrapper creation: ~200ns (dynamic proxy overhead)
+   *   <li>Command dispatch: ~50ns (method interception + forwarding)
+   *   <li>Total overhead: ~250-450ns per connection (amortized over commands)
+   * </ul>
+   *
+   * <p><strong>Best for:</strong> Workloads where key locality matters more than raw throughput.
+   * For maximum throughput with no key locality requirements, use {@link #ROUND_ROBIN} or {@link
+   * #THREAD_AFFINITY}.
+   *
+   * @see KeyAffinityStrategy
+   * @see com.macstab.oss.redis.laned.KeyAffinityConnectionWrapper
+   */
+  KEY_AFFINITY;
 
   /**
    * Create a {@link LaneSelectionStrategy} instance for this strategy type.
    *
-   * @return new strategy instance
+   * <p><strong>Factory method</strong> - returns a new instance on every call. Strategies are
+   * lightweight (no mutable state), but instances are NOT shared across managers. Each {@code
+   * LanedConnectionManager} gets its own strategy instance.
+   *
+   * @return new strategy instance (never null)
    */
   public LaneSelectionStrategy createStrategy() {
     return switch (this) {
       case ROUND_ROBIN -> new RoundRobinStrategy();
       case THREAD_AFFINITY -> new ThreadAffinityStrategy();
       case LEAST_USED -> new LeastUsedStrategy();
+      case KEY_AFFINITY -> new KeyAffinityStrategy();
     };
   }
 }

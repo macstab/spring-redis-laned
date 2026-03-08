@@ -71,8 +71,8 @@ package com.macstab.oss.redis.laned.strategy;
  *   - Uses custom wrapper (with dynamic proxy)
  * </pre>
  *
- * <p><strong>Per's note:</strong> I initially put the hashing logic here (in strategy), but it
- * didn't make sense. The strategy is called from {@code getConnection()}, where the key doesn't
+ * <p><strong>Christian's note:</strong> I initially put the hashing logic here (in strategy), but
+ * it didn't make sense. The strategy is called from {@code getConnection()}, where the key doesn't
  * exist yet. Moving logic to the wrapper (where we have access to method arguments via dynamic
  * proxy) is the only clean solution. This class is now just a type marker, which feels weird but is
  * architecturally correct.
