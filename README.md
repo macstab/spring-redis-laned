@@ -176,41 +176,31 @@ Choose your setup: **[Minimal](#minimal-setup-spring-boot)** · **[Recommended](
     <artifactId>redis-laned-spring-boot-4-starter</artifactId>
     <version>1.0.0</version>
 </dependency>
+
+<!-- OPTIONAL: Micrometer metrics integration -->
+<dependency>
+    <groupId>com.macstab.oss.redis</groupId>
+    <artifactId>redis-laned-metrics</artifactId>
+    <version>1.0.0</version>
+</dependency>
+
 ```
 
 ```gradle
 // Gradle: Spring Boot 3.x
 implementation 'com.macstab.oss.redis:redis-laned-spring-boot-3-starter:1.0.0'
+implementation 'com.macstab.oss.redis:redis-laned-metrics:1.0.0'
 
 // Gradle: Spring Boot 4.x
 implementation 'com.macstab.oss.redis:redis-laned-spring-boot-4-starter:1.0.0'
+implementation 'com.macstab.oss.redis:redis-laned-metrics:1.0.0'
 ```
 
 **2. Configure (2 Lines)**
 
-**Option A: YAML Configuration** (most common)
-
 ```yaml
 spring.data.redis.connection.strategy: LANED
 spring.data.redis.connection.lanes: 8
-```
-
-**Option B: Annotation Configuration** (type-safe, overrides YAML)
-
-```java
-import com.macstab.oss.redis.laned.config.LanedRedisConnection;
-import com.macstab.oss.redis.laned.strategy.LaneSelectionStrategyType;
-
-@SpringBootApplication
-@LanedRedisConnection(
-  lanes = 8,
-  strategy = LaneSelectionStrategyType.THREAD_AFFINITY
-)
-public class MyApplication {
-  public static void main(String[] args) {
-    SpringApplication.run(MyApplication.class, args);
-  }
-}
 ```
 
 **That's it.** Your existing `RedisTemplate` / `@Cacheable` / Spring Data Redis code works instantly. Zero code changes.
@@ -219,8 +209,6 @@ public class MyApplication {
 ```
 INFO ... LanedRedisAutoConfiguration : Activated laned connection strategy with 8 lanes
 ```
-
-**📖 Full Annotation Docs:** [docs/ANNOTATION-CONFIGURATION.md](docs/ANNOTATION-CONFIGURATION.md)
 
 ---
 
@@ -2075,6 +2063,119 @@ LanedConnectionManager manager = new LanedConnectionManager(
 // Use manager.getConnection() directly
 ```
 
+## Metrics (Optional)
+
+**⚠️ Metrics are COMPLETELY OPTIONAL.** Core library works standalone with zero overhead.
+
+### Three Usage Modes
+
+#### 1. **No Metrics** (Default, Zero Overhead)
+
+Core library uses `LanedRedisMetrics.NOOP` singleton — JIT compiler eliminates all metric calls.
+
+```java
+// No metrics dependency needed
+// Works out of the box with Spring Boot starter
+```
+
+**Overhead:** Zero (dead code elimination)
+
+---
+
+#### 2. **Micrometer Integration** (Spring Boot Actuator)
+
+**Add optional dependency:**
+
+```xml
+<dependency>
+    <groupId>com.macstab.oss.redis</groupId>
+    <artifactId>redis-laned-metrics</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+**Auto-configuration activates when:**
+- `redis-laned-metrics` on classpath
+- `io.micrometer:micrometer-core` on classpath
+- `spring.metrics.laned-redis.enabled=true` (default: true when dependencies present)
+
+**Metrics exported:**
+
+| Metric | Type | Tags | Description |
+|--------|------|------|-------------|
+| `redis.lettuce.laned.lane.selections` | Counter | `connection.name`, `lane.index`, `strategy.name` | Lane selection distribution |
+| `redis.lettuce.laned.lane.in_flight` | Gauge | `connection.name`, `lane.index` | Current in-flight operations per lane |
+| `redis.lettuce.laned.strategy.cas.retries` | Counter | `connection.name`, `strategy.name` | CAS contention in strategies |
+
+**Configuration:**
+
+```yaml
+spring:
+  metrics:
+    laned-redis:
+      enabled: true                    # Auto-enable when dependencies present
+      connection-name: "primary"       # Tag value (default: "default")
+```
+
+**Grafana compatibility:** Reuses `redis_pool_*` conventions where applicable.
+
+---
+
+#### 3. **Custom Metrics Implementation**
+
+Implement `LanedRedisMetrics` interface for Prometheus, StatsD, Dropwizard, etc.
+
+```java
+public class PrometheusLanedRedisMetrics implements LanedRedisMetrics {
+    
+    private final Counter selections;
+    
+    public PrometheusLanedRedisMetrics(CollectorRegistry registry) {
+        this.selections = Counter.build()
+            .name("redis_laned_lane_selections_total")
+            .labelNames("connection", "lane", "strategy")
+            .register(registry);
+    }
+    
+    @Override
+    public void recordLaneSelection(String conn, int lane, String strategy) {
+        selections.labels(conn, String.valueOf(lane), strategy).inc();
+    }
+}
+```
+
+**Wire manually:**
+
+```java
+@Bean
+public LanedConnectionManager lanedManager(RedisClient client) {
+    LanedRedisMetrics metrics = new PrometheusLanedRedisMetrics(registry);
+    return new LanedConnectionManager(client, codec, 8, strategy, metrics);
+}
+```
+
+---
+
+### Non-Spring Usage
+
+**Core library works WITHOUT Spring Boot:**
+
+```java
+// Pure Lettuce + laned connections (no Spring, no metrics)
+RedisClient client = RedisClient.create("redis://localhost");
+StatefulRedisConnection<String, String> conn = client.connect();
+
+LanedConnectionManager manager = new LanedConnectionManager(
+    client,
+    StringCodec.UTF8,
+    8,                           // 8 lanes
+    new RoundRobinStrategy(),
+    LanedRedisMetrics.NOOP       // No metrics (zero overhead)
+);
+
+// Use manager.getConnection() directly
+```
+
 **With custom metrics (no Spring):**
 
 ```java
@@ -2461,91 +2562,13 @@ private int selectLane(int numLanes) {
 
 **Caveat:** Requires even thread distribution. With 200 threads + 8 lanes → ~25 threads/lane (load concentration). With 8 threads + 8 lanes → 1:1 mapping (perfect isolation). Works best when `numThreads ≤ 2 × numLanes`.
 
-**⚠️ Transaction Safety:** Collision rate = `1 - e^(-n²/2m)` where n=threads, m=lanes. At n=7, m=50: ~39% collision. At n=50, m=50: ~100% collision (guaranteed). At n=50, m=200: ~12% collision. Use `numLanes ≥ numThreads` for safe transactions, or dedicated pool (`shareNativeConnection: false`).
+**⚠️ Transaction Safety:** Collision rate = `1 - e^(-n²/2m)` where n=threads, m=lanes. At n=m=50: ~39% collision probability. At n=m=2500: ~63% collision probability. Use `numLanes ≥ numThreads` for guaranteed transaction safety, or use dedicated connection pool (`shareNativeConnection: false`).
 
 ---
 
-## Lane Selection Strategies
+### `KEY_AFFINITY` (MurmurHash3)
 
-### ✅ `ROUND_ROBIN` (Default)
-
-**Status:** ✅ Production-ready (v1.0.0)
-
-Lock-free atomic counter with CAS. Uniform distribution across lanes.
-
-```java
-public int selectLane(final int numLanes) {
-    return (counter.getAndIncrement() & Integer.MAX_VALUE) % numLanes;
-}
-```
-
-**Dispatch cost:** O(1), 1 CAS (~5-20ns uncontended, ~150-500ns high contention)  
-**Distribution:** Uniform (each lane gets ~1/N traffic)  
-**Contention:** Low (atomic counter shared across threads)
-
-**Best for:** Default choice, uniform workloads, predictable distribution
-
----
-
-### ✅ `LEAST_USED` (Load-Aware)
-
-**Status:** ✅ Production-ready (v1.0.0)
-
-Scans all lanes, selects lane with minimum in-flight commands. Real-time load balancing.
-
-```java
-public int selectLane(final int numLanes) {
-    int minLane = 0;
-    int minCount = lanes[0].getInFlightCount().get();
-    for (int i = 1; i < numLanes; i++) {
-        int count = lanes[i].getInFlightCount().get();
-        if (count < minCount) {
-            minCount = count;
-            minLane = i;
-        }
-    }
-    return minLane;
-}
-```
-
-**Dispatch cost:** O(N) scan (~40-80ns for N=8, ~160-320ns for N=32)  
-**Distribution:** Load-proportional (avoids busy lanes, prefers idle lanes)  
-**Contention:** None (lock-free volatile reads)
-
-**Why it helps:** Avoids queuing behind slow commands. If lane 3 is processing slow `HGETALL` (18ms), new commands route to idle lanes.
-
-**Best for:** Mixed fast/slow commands, unpredictable workloads, HOL reduction
-
----
-
-### ✅ `THREAD_AFFINITY` (Thread-Sticky)
-
-**Status:** ✅ Production-ready (v1.0.0)
-
-Hash thread ID to lane. Same thread → same lane (deterministic affinity).
-
-```java
-public int selectLane(final int numLanes) {
-    long threadId = Thread.currentThread().threadId();
-    return (int) (MurmurHash3.hash(threadId) % numLanes);
-}
-```
-
-**Dispatch cost:** O(1), MurmurHash3 (~12-16ns)  
-**Distribution:** Uniform (if threads uniformly distributed)  
-**Contention:** None (stateless, no shared state)
-
-**Why it helps:**
-- **Transaction safety:** Same thread → same lane → `WATCH` + `MULTI` + `EXEC` guaranteed same connection
-- **Cache locality:** Same thread likely accesses same keys → same lane → better Redis cache hit rate
-
-**Best for:** Thread-per-request models, transactional workloads, Spring MVC (servlet threads)
-
----
-
-### ✅ Implemented: `KEY_AFFINITY` (MurmurHash3)
-
-**Status:** ✅ Implemented (v1.0+)
+**Status:** 📋 Production ready 1.1.0
 
 Route commands by Redis key hash. Same key → same lane (key isolation + transaction safety).
 
@@ -2575,6 +2598,9 @@ private int selectLane(RedisCommand<?, ?, ?> command) {
 **Note:** Uses MurmurHash3 (uniform distribution). Does NOT align with Redis Cluster CRC16 slots.
 
 ---
+
+
+## 📋 Planned Strategies
 
 ### `RANDOM`
 
@@ -2629,7 +2655,7 @@ Lane 3: EMA latency = 0.5ms         → weight 0.67  → 67% traffic
 | `ROUND_ROBIN`      | ✅ v1.0     | O(1), 1 CAS (~20ns)    | Low        | Default, uniform workloads         |
 | `LEAST_USED`       | ✅ v1.0     | O(N) scan (~50-100ns)  | None       | Mixed fast/slow commands           |
 | `THREAD_AFFINITY`  | ✅ v1.0     | O(1), hash (~15ns)     | None       | Transactional, thread-per-request  |
-| `KEY_AFFINITY`     | ✅ v1.0     | O(key len) (~50-200ns) | None       | Key-isolated, multi-tenant         |
+| `KEY_AFFINITY`     | ✅ v1.1     | O(key len) (~50-200ns) | None       | Key-isolated, multi-tenant         |
 | `RANDOM`           | 📋 Planned  | O(1), no CAS (~10ns)   | None       | Extreme concurrency (10K+ threads) |
 | `ADAPTIVE`         | 📋 Planned  | O(N) weighted (~200ns) | None       | Mixed SLO, self-optimizing         |
 
