@@ -1,6 +1,6 @@
 # spring-redis-laned: Technical Reference & Configuration Guide
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 
 **Version:** 1.0.0  
 **Spring Boot:** 3.x & 4.x  
@@ -142,7 +142,7 @@ p99 latency: 40ms → 2ms (95% improvement)
 - Reactive Spring Data Redis (Project Reactor transactional flows unsupported in v1.0)
 - Redis Cluster per-shard laning (planned v1.1)
 - Custom RESP command encoding (Lettuce API unchanged)
-- Alternative lane selection strategies (`LEAST_USED`, `KEY_AFFINITY` planned v1.1)
+- Alternative lane selection strategies (`LEAST_USED`, `KEY_AFFINITY` implemented v1.0)
 
 ### 1.3 Assumptions
 
@@ -278,7 +278,7 @@ p99 latency: 40ms → 2ms (95% improvement)
 | Pattern                 | Applied Where                              | Problem Solved                                                     |
 |-------------------------|--------------------------------------------|---------------------------------------------------------------------|
 | **Factory Method**      | `LanedLettuceConnectionFactory`            | Abstracts lane creation, supports standalone/sentinel/cluster       |
-| **Strategy**            | Lane selection (round-robin, future: key affinity) | Encapsulates dispatch algorithm, configurable via property      |
+| **Strategy**            | Lane selection (round-robin, thread-affinity, least-used, key-affinity) | Encapsulates dispatch algorithm, configurable via property      |
 | **Adapter**             | `LanedLettuceConnectionProvider`           | Adapts Lettuce `RedisChannelWriter` interface to lane array        |
 | **Builder**             | `LettuceClientConfiguration.builder()`     | Fluent construction of complex `ClientOptions` (SSL, timeouts)      |
 | **Decorator**           | `LettuceClientConfigurationBuilderCustomizer` | Extends configuration without modifying AutoConfiguration       |
@@ -1636,7 +1636,7 @@ grep "Reconnecting" application.log
    - Increase lanes: `spring.data.redis.connection.lanes=16`
    - Or: Separate factory for bulk operations
 2. If one lane saturated (skew):
-   - Wait for v1.1 (`KEY_AFFINITY` strategy to isolate hot keys)
+   - Implemented in v1.0 (`KEY_AFFINITY` strategy to isolate hot keys)
 3. If all lanes slow + Redis CPU high:
    - Scale Redis (vertical: more CPU, horizontal: cluster sharding)
 
@@ -2213,7 +2213,8 @@ public LaneInitializer redisLaneInitializer() {
 
 #### 13.2.3 Custom Lane Selection Strategy (Future)
 
-**Planned for v1.1:**
+**Implemented for v1.1:**
+**Implemented for v1.1:**
 ```yaml
 spring.data.redis.connection.strategy-mode: KEY_AFFINITY  # vs ROUND_ROBIN
 ```
@@ -2694,5 +2695,5 @@ without requiring O(threads) connections.
 
 **Document Status:** Production-Ready  
 **Last Updated:** 2026-02-22  
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 

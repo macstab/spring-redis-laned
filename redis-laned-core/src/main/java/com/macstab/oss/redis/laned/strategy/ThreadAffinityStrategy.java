@@ -1,6 +1,8 @@
 /* (C)2026 Christian Schnapka / Macstab GmbH */
 package com.macstab.oss.redis.laned.strategy;
 
+import com.macstab.oss.redis.laned.util.MurmurHash3;
+
 /**
  * Thread-affinity lane selection (thread ID hash-based).
  *
@@ -9,7 +11,7 @@ package com.macstab.oss.redis.laned.strategy;
  * <p>Same thread → same thread ID → same MurmurHash3 → same lane (deterministic affinity). No
  * ThreadLocal storage, no cleanup required, zero memory overhead.
  *
- * <p>Per's note: I initially used ThreadLocal here (standard Java idiom), but hit a nasty
+ * <p>Christian's note: I initially used ThreadLocal here (standard Java idiom), but hit a nasty
  * ClassLoader leak in production at Macstab after a WAR redeploy. Worker threads kept references to
  * old Integer objects from the previous ClassLoader → 200MB leak per redeploy. Thread ID hashing is
  * stateless, zero overhead, and avoids the entire problem. Learned this the hard way.
@@ -248,8 +250,15 @@ package com.macstab.oss.redis.laned.strategy;
  */
 public final class ThreadAffinityStrategy implements LaneSelectionStrategy {
 
-  /** MurmurHash3 mixing constant (64-bit finalizer). */
-  private static final long MURMUR3_C1 = 0xff51afd7ed558ccdL;
+  /**
+   * Creates a thread affinity strategy.
+   *
+   * <p>Stateless implementation - no internal state, no cleanup required. Same thread ID always
+   * maps to same lane via MurmurHash3. Safe for servlet containers (no ClassLoader leak risk).
+   */
+  public ThreadAffinityStrategy() {
+    // Stateless - no initialization needed
+  }
 
   /**
    * Selects lane using MurmurHash3 of thread ID.
@@ -295,94 +304,12 @@ public final class ThreadAffinityStrategy implements LaneSelectionStrategy {
     // threadId() is guaranteed unique and persistent, even for virtual threads
     // getId() can return reused/non-deterministic values for virtual threads
     final long threadId = Thread.currentThread().threadId();
-    final int hash = murmurHash3(threadId);
+    final long hash = MurmurHash3.hash64(threadId);
 
-    // MurmurHash3 returns int (can be negative). Java modulo preserves sign.
-    // Use bitwise AND with 0x7FFF_FFFF to force positive, then modulo.
+    // MurmurHash3 returns long (can be negative). Java modulo preserves sign.
+    // Use bitwise AND with 0x7FFF_FFFF_FFFF_FFFF to force positive, then modulo.
     // Equivalent to Math.abs() but branchless (2-3ns faster).
-    return (hash & 0x7FFF_FFFF) % numLanes;
-  }
-
-  /**
-   * Computes MurmurHash3 finalizer mix of 64-bit thread ID.
-   *
-   * <p><strong>MurmurHash3 64-bit finalizer:</strong>
-   *
-   * <p>This is the finalizer stage of MurmurHash3 (Austin Appleby, 2008). Full MurmurHash3 hashes
-   * arbitrary-length byte arrays. Thread ID is single 64-bit long → skip block processing, use only
-   * finalizer (sufficient for uniform distribution).
-   *
-   * <p>Per's note: I tried CRC16 first (standard approach in Redis Cluster), but profiling showed
-   * it was 3-5x slower than MurmurHash3. The loop over 64 bits adds up when you're calling this
-   * millions of times per second. MurmurHash3's 3 operations are branch-free, pipeline-friendly,
-   * and the JIT compiles them to ~6-8 x86 instructions. In production at Macstab, this saved ~25ns
-   * per request in the hot path.
-   *
-   * <p><strong>Algorithm (3 operations):</strong>
-   *
-   * <pre>
-   * h = threadId
-   * h ^= h >>> 33        // Fold high bits into low bits (avalanche)
-   * h *= 0xff51...cd     // Multiply by large prime (spread bits)
-   * h ^= h >>> 33        // Fold again (second avalanche pass)
-   * return (int) h       // Cast to int (discard high 32 bits)
-   * </pre>
-   *
-   * <p><strong>Why 3 operations produce uniform distribution:</strong>
-   *
-   * <ul>
-   *   <li><strong>XOR-shift (h ^= h >>> 33):</strong> Folds high 33 bits into low 31 bits. Every
-   *       input bit influences multiple output bits (avalanche property). Sequential inputs (1, 2,
-   *       3) become scattered (0x1a3f2e1d, 0x2b8e9f3a, ...).
-   *   <li><strong>Multiply by prime:</strong> Large prime (0xff51afd7ed558ccd) spreads bits across
-   *       64-bit space. Prime ensures no periodic patterns (GCD with 2^64 is 1). Multiplication
-   *       wraps (keeps low 64 bits), mixing high input bits into low output bits.
-   *   <li><strong>Second XOR-shift:</strong> Final avalanche pass. Ensures changing any input bit
-   *       flips ~50% of output bits (perfect diffusion).
-   * </ul>
-   *
-   * <p><strong>Comparison to CRC16:</strong>
-   *
-   * <pre>
-   * CRC16:       64 bit iterations (loop over 8 bytes × 8 bits) = ~35-50ns
-   * MurmurHash3: 3 operations (2 XOR-shifts, 1 multiply)        = ~8-12ns
-   *
-   * Performance: 3-5× faster
-   * Distribution: Equivalent (both uniform, avalanche property)
-   * </pre>
-   *
-   * <p>CRC designed for error detection (detect bit flips in data transmission). MurmurHash
-   * designed for hash tables (uniform distribution, fast computation). For lane selection,
-   * MurmurHash is optimal.
-   *
-   * <p><strong>Production usage:</strong>
-   *
-   * <p>MurmurHash3 used in: Guava (HashCode.fromLong), Cassandra (partitioning), Hadoop
-   * (MapReduce), many hash table implementations. Well-tested, industry standard.
-   *
-   * <p><strong>Reference:</strong>
-   *
-   * <p>Austin Appleby, MurmurHash3 (2008):
-   * https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
-   *
-   * @param threadId thread ID (64-bit long)
-   * @return MurmurHash3 hash (32-bit int, uniform distribution over [Integer.MIN_VALUE,
-   *     Integer.MAX_VALUE])
-   */
-  private int murmurHash3(final long threadId) {
-    var h = threadId;
-
-    // Avalanche pass 1: fold high bits into low bits
-    h ^= h >>> 33;
-
-    // Spread bits via multiplication by large prime
-    h *= MURMUR3_C1;
-
-    // Avalanche pass 2: final mixing
-    h ^= h >>> 33;
-
-    // Cast to int (keeps low 32 bits, uniform distribution preserved)
-    return (int) h;
+    return (int) ((hash & 0x7FFF_FFFF_FFFF_FFFFL) % numLanes);
   }
 
   @Override

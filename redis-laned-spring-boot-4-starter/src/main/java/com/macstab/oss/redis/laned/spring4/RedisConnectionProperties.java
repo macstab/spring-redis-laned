@@ -36,9 +36,19 @@ import lombok.Setter;
 @ConfigurationProperties(prefix = "spring.data.redis.connection")
 public class RedisConnectionProperties {
 
+  /** Minimum allowed lane count. */
   public static final int MIN_LANES = 1;
+
+  /** Maximum allowed lane count. */
   public static final int MAX_LANES = 64;
+
+  /** Default lane count (balanced for most workloads). */
   public static final int DEFAULT_LANES = 8;
+
+  /** Creates properties (Spring Boot populates via {@code @ConfigurationProperties} binding). */
+  public RedisConnectionProperties() {
+    // Lombok @Getter/@Setter generates accessors
+  }
 
   /**
    * Connection strategy: CLASSIC (single shared connection), POOLED (commons-pool), or LANED (fixed

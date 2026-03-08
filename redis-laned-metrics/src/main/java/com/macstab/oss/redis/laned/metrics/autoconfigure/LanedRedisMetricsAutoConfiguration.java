@@ -72,6 +72,16 @@ import lombok.extern.slf4j.Slf4j;
 public class LanedRedisMetricsAutoConfiguration {
 
   /**
+   * Creates the auto-configuration.
+   *
+   * <p>Spring Boot instantiates this class via default constructor when Micrometer is on classpath
+   * and metrics are enabled.
+   */
+  public LanedRedisMetricsAutoConfiguration() {
+    // Spring Boot instantiates via default constructor
+  }
+
+  /**
    * Creates Micrometer-based metrics collector when enabled (dimensional version).
    *
    * <p><strong>Activation:</strong>

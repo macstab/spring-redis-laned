@@ -3,15 +3,19 @@ package com.macstab.oss.redis.laned;
 
 import java.util.Optional;
 
+import com.macstab.oss.redis.laned.connection.SentinelTopology;
 import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
+import com.macstab.oss.redis.laned.strategy.KeyAffinityStrategy;
 import com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy;
 import com.macstab.oss.redis.laned.strategy.RoundRobinStrategy;
 
 import io.lettuce.core.ClientOptions;
+import io.lettuce.core.ReadFrom;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulConnection;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.RedisCodec;
+import io.lettuce.core.masterreplica.MasterReplica;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import lombok.Getter;
 import lombok.NonNull;
@@ -35,7 +39,7 @@ import lombok.extern.slf4j.Slf4j;
  * <p>N lanes: slow command on lane K blocks only 1/N probability (strategy-dependent). N=8 with
  * round-robin → 87.5% HOL reduction.
  *
- * <p>Per's note: I spent 3 days profiling this at Macstab before I understood the root cause.
+ * <p>Christian's note: I spent 3 days profiling this at Macstab before I understood the root cause.
  * Everyone assumes it's Redis being slow, or the network, or Spring's pooling. But the profiler
  * showed threads parked in CompletableFuture.get() while Redis reported 3% CPU. The smoking gun was
  * CommandHandler.stack - 200+ commands queued behind a single slow HGETALL. Once you see it, the
@@ -67,7 +71,18 @@ public final class LanedConnectionManager {
   private final PubSubConnectionTracker pubSubTracker;
   private final LanedRedisMetrics metrics;
   private final String connectionName;
-  private volatile boolean destroyed;
+  private final Optional<ReadFrom> readFrom;
+  private final Optional<SentinelTopology> sentinelTopology;
+  @Getter private volatile boolean destroyed;
+
+  /**
+   * Shared RoundRobinStrategy for KeyAffinity fallback (keyless commands).
+   *
+   * <p>KeyAffinityStrategy uses this for commands without keys (PING, INFO, CLIENT*). Shared across
+   * all KeyAffinityConnectionWrapper instances to ensure true round-robin distribution (counter
+   * increments across all wrappers, not per-wrapper). Thread-safe via AtomicInteger.
+   */
+  private final RoundRobinStrategy roundRobinFallback;
 
   /**
    * Creates manager with default round-robin strategy.
@@ -80,7 +95,15 @@ public final class LanedConnectionManager {
       @NonNull final RedisClient client,
       @NonNull final RedisCodec<?, ?> codec,
       final int numLanes) {
-    this(client, codec, numLanes, new RoundRobinStrategy(), Optional.empty());
+    this(
+        client,
+        codec,
+        numLanes,
+        new RoundRobinStrategy(),
+        Optional.empty(),
+        "default",
+        Optional.empty(),
+        Optional.empty());
   }
 
   /**
@@ -110,7 +133,15 @@ public final class LanedConnectionManager {
       @NonNull final RedisCodec<?, ?> codec,
       final int numLanes,
       @NonNull final LaneSelectionStrategy strategy) {
-    this(client, codec, numLanes, strategy, Optional.empty());
+    this(
+        client,
+        codec,
+        numLanes,
+        strategy,
+        Optional.empty(),
+        "default",
+        Optional.empty(),
+        Optional.empty());
   }
 
   /**
@@ -136,7 +167,7 @@ public final class LanedConnectionManager {
       final int numLanes,
       @NonNull final LaneSelectionStrategy strategy,
       @NonNull final Optional<LanedRedisMetrics> metrics) {
-    this(client, codec, numLanes, strategy, metrics, "default");
+    this(client, codec, numLanes, strategy, metrics, "default", Optional.empty(), Optional.empty());
   }
 
   /**
@@ -160,10 +191,57 @@ public final class LanedConnectionManager {
       final int numLanes,
       @NonNull final LaneSelectionStrategy strategy,
       @NonNull final Optional<LanedRedisMetrics> metrics,
-      @NonNull final String connectionName) {
+      final String connectionName) {
+    this(
+        client,
+        codec,
+        numLanes,
+        strategy,
+        metrics,
+        connectionName,
+        Optional.empty(),
+        Optional.empty());
+  }
+
+  /**
+   * Creates manager with custom selection strategy, metrics, connection name, and Sentinel support.
+   *
+   * <p><strong>Sentinel failover + read-from-replica routing:</strong>
+   *
+   * <p>When both {@code sentinelTopology} and {@code readFrom} are provided, uses {@link
+   * io.lettuce.core.masterreplica.MasterReplica#connect} for automatic failover and replica read
+   * routing.
+   *
+   * @param client Redis client (must not be null)
+   * @param codec codec for encoding/decoding (must not be null)
+   * @param numLanes number of lanes (must be &gt;= 1, recommended: 8)
+   * @param strategy lane selection strategy (must not be null)
+   * @param metrics metrics collector (optional, defaults to NOOP if not present)
+   * @param connectionName connection name for dimensional metrics (default: "default")
+   * @param readFrom read-from strategy for Sentinel (optional, requires sentinelTopology)
+   * @param sentinelTopology Sentinel topology (optional, enables MasterReplica failover)
+   */
+  public LanedConnectionManager(
+      @NonNull final RedisClient client,
+      @NonNull final RedisCodec<?, ?> codec,
+      final int numLanes,
+      @NonNull final LaneSelectionStrategy strategy,
+      @NonNull final Optional<LanedRedisMetrics> metrics,
+      final String connectionName,
+      @NonNull final Optional<ReadFrom> readFrom,
+      @NonNull final Optional<SentinelTopology> sentinelTopology) {
 
     if (numLanes < 1) {
       throw new IllegalArgumentException("numLanes must be >= 1, got: " + numLanes);
+    }
+
+    // Warn on potential misconfiguration
+    if (readFrom.isPresent() && sentinelTopology.isEmpty()) {
+      log.warn(
+          "ReadFrom={} configured but no Sentinel topology provided. "
+              + "ReadFrom will be ignored (no replicas available). "
+              + "This is expected for standalone Redis or Enterprise proxy mode.",
+          readFrom.get());
     }
 
     this.client = client;
@@ -173,8 +251,11 @@ public final class LanedConnectionManager {
     this.strategy = strategy;
     this.pubSubTracker = new PubSubConnectionTracker(client, codec);
     this.metrics = metrics.orElse(LanedRedisMetrics.NOOP);
-    this.connectionName = connectionName;
+    this.connectionName = connectionName != null ? connectionName : "default";
+    this.readFrom = readFrom;
+    this.sentinelTopology = sentinelTopology;
     this.destroyed = false;
+    this.roundRobinFallback = new RoundRobinStrategy();
 
     configureClientOptions();
     initializeLanes();
@@ -184,10 +265,12 @@ public final class LanedConnectionManager {
 
     if (log.isInfoEnabled()) {
       log.info(
-          "Created LanedConnectionManager with {} lanes using {} strategy (connection: {})",
+          "Created LanedConnectionManager: lanes={}, strategy={}, connection={}, readFrom={}, sentinel={}",
           numLanes,
           strategy.getName(),
-          connectionName);
+          this.connectionName,
+          readFrom.map(Object::toString).orElse("none"),
+          sentinelTopology.isPresent() ? "enabled" : "none");
     }
   }
 
@@ -215,11 +298,27 @@ public final class LanedConnectionManager {
    *
    * <p>Profiling recommendation: For custom strategies, verify via JMH that {@code getConnection()}
    * completes in &lt;1μs (including strategy selection + array access).
+   *
+   * @return wrapped connection with lifecycle tracking (close releases wrapper, not underlying
+   *     connection)
    */
   public StatefulRedisConnection<?, ?> getConnection() {
     checkNotDestroyed();
 
-    // Strategy selects lane (algorithm-specific logic)
+    // KeyAffinityStrategy requires lazy lane selection (key not available until first command)
+    if (strategy instanceof KeyAffinityStrategy) {
+      // Return wrapper with dynamic proxy (selects lane on first command)
+      // Pass shared fallback + metrics for proper distribution tracking
+      return new KeyAffinityConnectionWrapper<>(
+          this,
+          (KeyAffinityStrategy) strategy,
+          numLanes,
+          roundRobinFallback,
+          metrics,
+          connectionName);
+    }
+
+    // Standard strategies: select lane eagerly (upfront, before returning connection)
     final var laneIndex = strategy.selectLane(numLanes);
 
     // Record lane selection (dimensional metrics)
@@ -247,6 +346,9 @@ public final class LanedConnectionManager {
    * <p>RESP push messages (RESP3): {@code >3\r\n$7\r\nmessage\r\n...} (unsolicited, no matching
    * command in FIFO stack). Lettuce's {@code PubSubCommandHandler} intercepts push, dispatches to
    * listeners. Cannot coexist with regular {@code CommandHandler} FIFO matching.
+   *
+   * @return new Pub/Sub connection (tracked by manager, must be released via {@link
+   *     #releaseConnection(StatefulConnection)})
    */
   public StatefulRedisPubSubConnection<?, ?> getPubSubConnection() {
     checkNotDestroyed();
@@ -259,6 +361,8 @@ public final class LanedConnectionManager {
    * <p>Lane connections: no-op (long-lived, closed only during {@code destroy()}). Pub/Sub: {@code
    * CopyOnWriteArrayList.remove()} (array copy + volatile write), then {@code close()} (QUIT + TCP
    * FIN + FD release).
+   *
+   * @param connection connection to release (may be null, may be lane connection or Pub/Sub)
    */
   public void releaseConnection(final StatefulConnection<?, ?> connection) {
     if (connection == null) {
@@ -270,6 +374,14 @@ public final class LanedConnectionManager {
     }
   }
 
+  /**
+   * Returns the number of open lanes (connections with active TCP sockets).
+   *
+   * <p>Used for health checks and monitoring. A lane is considered open if its underlying Lettuce
+   * connection reports {@code isOpen() == true} (Netty channel state != CLOSED).
+   *
+   * @return count of open lanes (0 to {@code numLanes})
+   */
   public int getOpenLaneCount() {
     int count = 0;
     for (final var lane : lanes) {
@@ -280,6 +392,15 @@ public final class LanedConnectionManager {
     return count;
   }
 
+  /**
+   * Returns the number of active Pub/Sub connections.
+   *
+   * <p>Pub/Sub connections are created on-demand via {@link #getPubSubConnection()} and tracked
+   * until released via {@link #releaseConnection(StatefulConnection)}. Unlike lane connections
+   * (fixed N), Pub/Sub connections grow unbounded if not released.
+   *
+   * @return count of active Pub/Sub connections (0+)
+   */
   public int getPubSubConnectionCount() {
     return pubSubTracker.getConnectionCount();
   }
@@ -316,10 +437,6 @@ public final class LanedConnectionManager {
     }
   }
 
-  public boolean isDestroyed() {
-    return destroyed;
-  }
-
   // ==================== Private Methods ====================
 
   private void checkNotDestroyed() {
@@ -350,6 +467,13 @@ public final class LanedConnectionManager {
   /**
    * Initializes N lanes.
    *
+   * <p><strong>Connection mode:</strong>
+   *
+   * <ul>
+   *   <li>Sentinel + ReadFrom → {@link MasterReplica#connect} with failover + read routing
+   *   <li>Otherwise → {@link RedisClient#connect} direct to master
+   * </ul>
+   *
    * <p>{@code client.connect(codec)}: Netty {@code Bootstrap.connect()} on {@code
    * NioEventLoopGroup}, TCP handshake (SYN/SYN-ACK/ACK = 1.5 RTT), pipeline: {@code
    * ConnectionWatchdog} → {@code CommandEncoder} (RESP serialization) → {@code CommandHandler}
@@ -357,14 +481,63 @@ public final class LanedConnectionManager {
    * RTT).
    */
   private void initializeLanes() {
+    final boolean useMasterReplica = sentinelTopology.isPresent() && readFrom.isPresent();
+
+    if (useMasterReplica) {
+      log.info(
+          "Initializing {} lanes with MasterReplica (Sentinel failover + ReadFrom={})",
+          numLanes,
+          readFrom.get());
+    } else {
+      log.info("Initializing {} lanes with direct connection (master-only)", numLanes);
+    }
+
     try {
       for (int i = 0; i < numLanes; i++) {
-        final var connection = client.connect(codec);
+        final var connection = createConnection(i, useMasterReplica);
         lanes[i] = new ConnectionLane(i, connection, metrics, connectionName);
       }
     } catch (final RuntimeException ex) {
       closeLanes();
       throw new IllegalStateException("Failed to initialize lanes", ex);
+    }
+  }
+
+  /**
+   * Creates a single lane connection.
+   *
+   * @param laneIndex lane index (for logging)
+   * @param useMasterReplica whether to use MasterReplica mode
+   * @return initialized connection
+   */
+  @SuppressWarnings("unchecked")
+  private StatefulRedisConnection<?, ?> createConnection(
+      final int laneIndex, final boolean useMasterReplica) {
+
+    if (useMasterReplica) {
+      // Sentinel with ReadFrom → use MasterReplica for failover + read routing
+      final var sentinelUri = sentinelTopology.get().toSentinelUri();
+      final var connection = MasterReplica.connect(client, codec, sentinelUri);
+      connection.setReadFrom(readFrom.get());
+
+      if (log.isDebugEnabled()) {
+        log.debug(
+            "Lane {} initialized: MasterReplica (Sentinel={}, ReadFrom={})",
+            laneIndex,
+            sentinelUri.getSentinelMasterId(),
+            readFrom.get());
+      }
+
+      return connection;
+    } else {
+      // Direct connection to master (standalone, Enterprise proxy, or Sentinel without ReadFrom)
+      final var connection = client.connect(codec);
+
+      if (log.isDebugEnabled()) {
+        log.debug("Lane {} initialized: direct connection", laneIndex);
+      }
+
+      return connection;
     }
   }
 

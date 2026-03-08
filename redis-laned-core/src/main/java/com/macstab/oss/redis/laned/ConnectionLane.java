@@ -80,10 +80,24 @@ public class ConnectionLane {
    */
   String connectionName;
 
+  /**
+   * Creates a connection lane with default metrics (NOOP) and connection name.
+   *
+   * @param index lane index (must be &gt;= 0)
+   * @param connection Lettuce connection (must not be null, shared across threads)
+   */
   public ConnectionLane(final int index, @NonNull final StatefulRedisConnection<?, ?> connection) {
     this(index, connection, LanedRedisMetrics.NOOP, "default");
   }
 
+  /**
+   * Creates a connection lane with custom metrics and connection name.
+   *
+   * @param index lane index (must be &gt;= 0)
+   * @param connection Lettuce connection (must not be null, shared across threads)
+   * @param metrics metrics collector (must not be null, may be NOOP)
+   * @param connectionName connection name for dimensional metrics (must not be null)
+   */
   public ConnectionLane(
       final int index,
       @NonNull final StatefulRedisConnection<?, ?> connection,
@@ -143,6 +157,8 @@ public class ConnectionLane {
    * <p><strong>DO NOT CLOSE:</strong> Breaks all threads using this lane. Closes TCP socket, fails
    * all in-flight commands, rejects future commands. Only {@code LanedConnectionManager.destroy()}
    * should close.
+   *
+   * @return the shared Lettuce connection for this lane
    */
   public StatefulRedisConnection<?, ?> getConnection() {
     return connection;
@@ -165,6 +181,8 @@ public class ConnectionLane {
    *
    * <p>Volatile read: ensures visibility of writes from other threads (cache flush + MESI). x86_64:
    * volatile read = normal {@code mov} (TSO guarantees visibility).
+   *
+   * @return {@code true} if connection is open, {@code false} if closed
    */
   public boolean isOpen() {
     return connection.isOpen();

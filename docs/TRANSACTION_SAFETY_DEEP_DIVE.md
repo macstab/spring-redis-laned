@@ -1,6 +1,6 @@
 # Transaction Safety Deep Dive: Why MULTI/EXEC Fails on Shared Connections
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 
 **Date:** 2026-02-21  
 **Status:** Technical Deep Dive

@@ -44,7 +44,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 @Testcontainers
 @DisplayName("Metrics Integration Test")
 class MetricsIntegrationTest {
-
   @Nested
   @DisplayName("Spring Boot 3 Metrics Integration")
   @SpringBootTest(

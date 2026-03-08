@@ -1,7 +1,7 @@
 # Design Decision: Thread Affinity via Thread ID Hash (NOT ThreadLocal)
 
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 
 **Date:** 2026-02-20  
 **Status:** Implemented
@@ -290,5 +290,5 @@ ThreadLocal is appropriate when:
 
 **Implemented:** `ThreadAffinityStrategy.java` (187 lines, zero dependencies, zero memory overhead)
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 

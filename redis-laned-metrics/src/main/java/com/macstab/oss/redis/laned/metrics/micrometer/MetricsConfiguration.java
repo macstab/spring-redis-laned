@@ -24,6 +24,9 @@ import lombok.experimental.UtilityClass;
  *
  * <p><strong>Why dots in code:</strong> Micrometer convention, monitoring-system agnostic.
  *
+ * <p><strong>Construction:</strong> This is a utility class (Lombok {@code @UtilityClass}) which
+ * generates a private constructor to prevent instantiation. Use static constants directly.
+ *
  * @since 1.0.0
  * @author Christian Schnapka - Macstab GmbH
  */
@@ -156,20 +159,47 @@ public class MetricsConfiguration {
    */
   public static final String CONNECTIONS_OPEN = PREFIX + ".connections.open";
 
-  // Tag keys
+  // ==================== Metric Tag Keys ====================
+
+  /** Tag key: connection name (e.g., "primary", "cache", "session"). */
   public static final String TAG_CONNECTION_NAME = "connection.name";
+
+  /** Tag key: Lettuce client name (for multi-client setups). */
   public static final String TAG_CLIENT_NAME = "client.name";
+
+  /** Tag key: lane index (0-based, range [0, numLanes-1]). */
   public static final String TAG_LANE_INDEX = "lane.index";
+
+  /** Tag key: strategy name (e.g., "round-robin", "thread-affinity", "least-used"). */
   public static final String TAG_STRATEGY_NAME = "strategy.name";
+
+  /** Tag key: Redis command type (e.g., "GET", "SET", "HGETALL"). */
   public static final String TAG_COMMAND = "command";
+
+  /** Tag key: slow command threshold (e.g., "10ms", "100ms"). */
   public static final String TAG_THRESHOLD = "threshold";
+
+  /** Tag key: latency percentile (e.g., "0.50", "0.95", "0.99"). */
   public static final String TAG_PERCENTILE = "percentile";
+
+  /** Tag key: time unit for latency (e.g., "MICROSECONDS"). */
   public static final String TAG_UNIT = "unit";
 
-  // Deprecated tag keys (backward compatibility)
+  // ==================== Deprecated Tags (Backward Compatibility) ====================
+
+  /**
+   * Deprecated alias for {@link #TAG_LANE_INDEX}.
+   *
+   * @deprecated Use {@link #TAG_LANE_INDEX} instead (since 1.1.0, removed in 2.0.0)
+   */
   @Deprecated(since = "1.1.0", forRemoval = true)
   public static final String TAG_LANE = TAG_LANE_INDEX;
 
+  /**
+   * Deprecated alias for {@link #TAG_STRATEGY_NAME}.
+   *
+   * @deprecated Use {@link #TAG_STRATEGY_NAME} instead (since 1.1.0, removed in 2.0.0)
+   */
   @Deprecated(since = "1.1.0", forRemoval = true)
   public static final String TAG_STRATEGY = TAG_STRATEGY_NAME;
 }

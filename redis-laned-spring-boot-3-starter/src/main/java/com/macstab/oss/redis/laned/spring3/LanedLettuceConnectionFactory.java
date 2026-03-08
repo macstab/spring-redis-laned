@@ -41,11 +41,12 @@ import lombok.extern.slf4j.Slf4j;
 public final class LanedLettuceConnectionFactory extends LettuceConnectionFactory {
 
   private final int numLanes;
+  private final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy;
   private final Optional<LanedRedisMetrics> metrics;
   @Getter private LanedLettuceConnectionProvider lanedProvider;
 
   /**
-   * Creates a laned connection factory for standalone Redis (no metrics).
+   * Creates a laned connection factory for standalone Redis (no metrics, default strategy).
    *
    * @param standaloneConfig standalone configuration
    * @param clientConfig Lettuce client configuration
@@ -57,15 +58,21 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       final RedisStandaloneConfiguration standaloneConfig,
       final LettuceClientConfiguration clientConfig,
       final int numLanes) {
-    this(standaloneConfig, clientConfig, numLanes, Optional.empty());
+    this(
+        standaloneConfig,
+        clientConfig,
+        numLanes,
+        new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy(),
+        Optional.empty());
   }
 
   /**
-   * Creates a laned connection factory for standalone Redis with metrics.
+   * Creates a laned connection factory for standalone Redis with strategy and metrics.
    *
    * @param standaloneConfig standalone configuration
    * @param clientConfig Lettuce client configuration
    * @param numLanes number of lanes (recommended: 8)
+   * @param strategy lane selection strategy
    * @param metrics metrics collector (optional, defaults to NOOP if not present)
    * @throws IllegalArgumentException if standaloneConfig or clientConfig is null, or numLanes is
    *     out of range [1, 64]
@@ -74,15 +81,18 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       final RedisStandaloneConfiguration standaloneConfig,
       final LettuceClientConfiguration clientConfig,
       final int numLanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<LanedRedisMetrics> metrics) {
     super(standaloneConfig, clientConfig);
     validateNumLanes(numLanes);
     this.numLanes = numLanes;
+    this.strategy =
+        strategy != null ? strategy : new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy();
     this.metrics = metrics;
   }
 
   /**
-   * Creates a laned connection factory for Redis Sentinel (no metrics).
+   * Creates a laned connection factory for Redis Sentinel (no metrics, default strategy).
    *
    * @param sentinelConfig Sentinel configuration
    * @param clientConfig Lettuce client configuration
@@ -94,15 +104,21 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       final RedisSentinelConfiguration sentinelConfig,
       final LettuceClientConfiguration clientConfig,
       final int numLanes) {
-    this(sentinelConfig, clientConfig, numLanes, Optional.empty());
+    this(
+        sentinelConfig,
+        clientConfig,
+        numLanes,
+        new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy(),
+        Optional.empty());
   }
 
   /**
-   * Creates a laned connection factory for Redis Sentinel with metrics.
+   * Creates a laned connection factory for Redis Sentinel with strategy and metrics.
    *
    * @param sentinelConfig Sentinel configuration
    * @param clientConfig Lettuce client configuration
    * @param numLanes number of lanes (recommended: 8)
+   * @param strategy lane selection strategy
    * @param metrics metrics collector (optional, defaults to NOOP if not present)
    * @throws IllegalArgumentException if sentinelConfig or clientConfig is null, or numLanes is out
    *     of range [1, 64]
@@ -111,15 +127,18 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       final RedisSentinelConfiguration sentinelConfig,
       final LettuceClientConfiguration clientConfig,
       final int numLanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<LanedRedisMetrics> metrics) {
     super(sentinelConfig, clientConfig);
     validateNumLanes(numLanes);
     this.numLanes = numLanes;
+    this.strategy =
+        strategy != null ? strategy : new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy();
     this.metrics = metrics;
   }
 
   /**
-   * Creates a laned connection factory for Redis Cluster (no metrics).
+   * Creates a laned connection factory for Redis Cluster (no metrics, default strategy).
    *
    * <p><strong>Note:</strong> Cluster mode falls back to default provider (per-shard connections).
    * Per-shard laning is planned for a future release.
@@ -134,11 +153,16 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       final RedisClusterConfiguration clusterConfig,
       final LettuceClientConfiguration clientConfig,
       final int numLanes) {
-    this(clusterConfig, clientConfig, numLanes, Optional.empty());
+    this(
+        clusterConfig,
+        clientConfig,
+        numLanes,
+        new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy(),
+        Optional.empty());
   }
 
   /**
-   * Creates a laned connection factory for Redis Cluster with metrics.
+   * Creates a laned connection factory for Redis Cluster with strategy and metrics.
    *
    * <p><strong>Note:</strong> Cluster mode falls back to default provider (per-shard connections).
    * Per-shard laning is planned for a future release.
@@ -146,6 +170,7 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
    * @param clusterConfig cluster configuration
    * @param clientConfig Lettuce client configuration
    * @param numLanes number of lanes (ignored for cluster - uses default provider)
+   * @param strategy lane selection strategy (ignored for cluster)
    * @param metrics metrics collector (optional, defaults to NOOP if not present)
    * @throws IllegalArgumentException if clusterConfig or clientConfig is null, or numLanes is out
    *     of range [1, 64]
@@ -154,10 +179,13 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       final RedisClusterConfiguration clusterConfig,
       final LettuceClientConfiguration clientConfig,
       final int numLanes,
+      final com.macstab.oss.redis.laned.strategy.LaneSelectionStrategy strategy,
       final Optional<LanedRedisMetrics> metrics) {
     super(clusterConfig, clientConfig);
     validateNumLanes(numLanes);
     this.numLanes = numLanes;
+    this.strategy =
+        strategy != null ? strategy : new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy();
     this.metrics = metrics;
   }
 
@@ -180,19 +208,51 @@ public final class LanedLettuceConnectionFactory extends LettuceConnectionFactor
       return super.doCreateConnectionProvider(client, codec);
     }
 
+    // Extract ReadFrom from LettuceClientConfiguration
+    final Optional<io.lettuce.core.ReadFrom> readFrom = getClientConfiguration().getReadFrom();
+
+    // Extract Sentinel topology if configured
+    final Optional<com.macstab.oss.redis.laned.connection.SentinelTopology> sentinelTopology =
+        extractSentinelTopology();
+
     // Standalone/Sentinel/Enterprise: use laned manager with metrics
-    final var strategy = new com.macstab.oss.redis.laned.strategy.RoundRobinStrategy();
-    final var manager = new LanedConnectionManager(redisClient, codec, numLanes, strategy, metrics);
+    final var manager =
+        new LanedConnectionManager(
+            redisClient, codec, numLanes, this.strategy, metrics, null, readFrom, sentinelTopology);
     this.lanedProvider = new LanedLettuceConnectionProvider(manager);
 
     if (log.isInfoEnabled()) {
       log.info(
-          "Created LanedLettuceConnectionProvider with {} lanes (metrics: {})",
+          "Created LanedLettuceConnectionProvider: lanes={}, readFrom={}, sentinel={}, metrics={}",
           numLanes,
+          readFrom.map(Object::toString).orElse("none"),
+          sentinelTopology.isPresent() ? "enabled" : "none",
           metrics.isPresent() ? "enabled" : "disabled");
     }
 
     return lanedProvider;
+  }
+
+  /**
+   * Extracts Sentinel topology from configuration.
+   *
+   * @return Sentinel topology if configured, empty otherwise
+   */
+  private Optional<com.macstab.oss.redis.laned.connection.SentinelTopology>
+      extractSentinelTopology() {
+    if (getSentinelConfiguration() == null) {
+      return Optional.empty();
+    }
+
+    try {
+      final var topology =
+          com.macstab.oss.redis.laned.spring3.sentinel.SentinelUriBuilder.buildTopology(
+              getSentinelConfiguration());
+      return Optional.of(topology);
+    } catch (final Exception e) {
+      log.error("Failed to build Sentinel topology, falling back to direct connection", e);
+      return Optional.empty();
+    }
   }
 
   @Override

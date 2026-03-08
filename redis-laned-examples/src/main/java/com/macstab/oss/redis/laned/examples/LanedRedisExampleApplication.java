@@ -27,6 +27,11 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class LanedRedisExampleApplication {
 
+  /**
+   * Application entry point.
+   *
+   * @param args command-line arguments
+   */
   public static void main(String[] args) {
     SpringApplication.run(LanedRedisExampleApplication.class, args);
   }

@@ -21,7 +21,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 
-import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
+import com.macstab.oss.redis.laned.test.factory.RedisContainerFactory;
 
 /**
  * Integration tests for SSL/TLS with laned connections.
@@ -65,13 +65,12 @@ import com.macstab.oss.redis.laned.spring4.testutil.RedisTestContainers;
 @Tag("integration")
 @DisplayName("SSL/TLS Integration Tests")
 class SSLIntegrationTest {
-
   // Shared TLS Redis container (started once for all tests)
   private static GenericContainer<?> REDIS_TLS;
 
   @BeforeAll
   static void startRedisWithTLS() {
-    REDIS_TLS = RedisTestContainers.createStandaloneWithSSL();
+    REDIS_TLS = RedisContainerFactory.createStandaloneWithSSL();
     REDIS_TLS.start();
   }
 

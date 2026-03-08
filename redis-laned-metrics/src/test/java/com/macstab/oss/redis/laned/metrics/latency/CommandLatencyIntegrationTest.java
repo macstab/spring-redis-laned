@@ -60,7 +60,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 @Tag("integration")
 @DisplayName("CommandLatencyExporter Integration Tests")
 class CommandLatencyIntegrationTest {
-
   @Container
   static final GenericContainer<?> redis =
       new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))

@@ -1,6 +1,6 @@
 # Reactive Transactions
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 
 **Status:** Planned for future release
 
