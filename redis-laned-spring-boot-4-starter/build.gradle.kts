@@ -2,7 +2,7 @@ description = "Spring Boot 4.x starter for laned Redis connections (Java 21+ req
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(25))
     }
 }
 
@@ -40,6 +40,9 @@ dependencies {
     testImplementation(project(":redis-laned-metrics"))
     testImplementation("io.micrometer:micrometer-core:1.12.0")
     
+    // Test - Test utilities (shared annotations and container extensions)
+    testImplementation(project(":redis-laned-test-utils"))
+    
     // Test - Spring Boot
     testImplementation("org.springframework.boot:spring-boot-starter-test:4.0.3") {
         // Let Spring Boot 4 control JUnit version (6.0.3, not root 5.12.2)
@@ -51,8 +54,8 @@ dependencies {
     testRuntimeOnly("ch.qos.logback:logback-classic:1.5.15")
     
     // Test - Testcontainers
-    testImplementation("org.testcontainers:testcontainers:1.19.3")
-    testImplementation("org.testcontainers:junit-jupiter:1.19.3")
+    testImplementation("org.testcontainers:testcontainers:1.20.4")
+    testImplementation("org.testcontainers:junit-jupiter:1.20.4")
     
     // Test - Redis Testcontainers (generic container for Sentinel/custom setups)
     testImplementation("com.redis.testcontainers:testcontainers-redis:1.6.4")

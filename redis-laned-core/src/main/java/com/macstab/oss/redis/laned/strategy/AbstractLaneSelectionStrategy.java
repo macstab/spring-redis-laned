@@ -84,6 +84,18 @@ import lombok.experimental.FieldDefaults;
 public abstract class AbstractLaneSelectionStrategy implements LaneSelectionStrategy {
 
   /**
+   * Protected constructor for subclasses.
+   *
+   * <p>This abstract class is extended by stateful lane selection strategies that need access to
+   * lane state (e.g., {@link LeastUsedStrategy}). Stateless strategies (e.g., {@code
+   * RoundRobinStrategy}, {@code ThreadAffinityStrategy}) should implement {@link
+   * LaneSelectionStrategy} directly.
+   */
+  protected AbstractLaneSelectionStrategy() {
+    // No initialization needed - lanes field set via initialize()
+  }
+
+  /**
    * Lane references for reading in-flight counts (protected for subclass access).
    *
    * <p><strong>NOT final (two-phase initialization):</strong> Set in {@link

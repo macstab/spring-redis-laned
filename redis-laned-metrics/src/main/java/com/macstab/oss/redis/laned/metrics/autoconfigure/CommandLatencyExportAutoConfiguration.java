@@ -80,6 +80,16 @@ import lombok.extern.slf4j.Slf4j;
 public class CommandLatencyExportAutoConfiguration {
 
   /**
+   * Creates the auto-configuration.
+   *
+   * <p>Spring Boot instantiates this class via default constructor when all conditions are met
+   * (Lettuce on classpath, ClientResources bean exists, metrics enabled).
+   */
+  public CommandLatencyExportAutoConfiguration() {
+    // Spring Boot instantiates via default constructor
+  }
+
+  /**
    * Creates {@link CommandLatencyExporter} bean.
    *
    * <p><strong>Preconditions:</strong>

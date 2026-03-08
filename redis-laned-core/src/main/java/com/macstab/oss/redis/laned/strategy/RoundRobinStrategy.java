@@ -243,6 +243,8 @@ public final class RoundRobinStrategy implements LaneSelectionStrategy {
    * </ul>
    *
    * <p>NOT useful for: correctness guarantees (wraps make absolute count unreliable).
+   *
+   * @return current counter value (may have wrapped at 2^31, use for relative measurements only)
    */
   public int getTotalSelections() {
     return counter.get();

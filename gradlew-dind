@@ -1,0 +1,19 @@
+#!/bin/bash
+# Wrapper for gradlew that sets Docker environment for DinD
+# Usage: ./gradlew-dind test --tests "*IntegrationTest"
+
+set -e
+
+export DOCKER_HOST=unix:///var/run/docker.sock
+export TESTCONTAINERS_RYUK_DISABLED=true
+
+# Set JVM args for Gradle daemon
+export GRADLE_OPTS="-Ddocker.host=unix:///var/run/docker.sock -Dtestcontainers.ryuk.disabled=true"
+
+# Set JVM args for test execution
+export ORG_GRADLE_PROJECT_testJvmArgs="-Ddocker.host=unix:///var/run/docker.sock -Dtestcontainers.ryuk.disabled=true"
+
+echo "✓ Docker environment configured for DinD"
+echo "  DOCKER_HOST=$DOCKER_HOST"
+
+exec "$(dirname "$0")/gradlew" "$@"

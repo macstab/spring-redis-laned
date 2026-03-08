@@ -1,6 +1,6 @@
 # Redis Laned Connection Pool: Empirical Performance Analysis
 
-**Author:** Christian Schnapka - Macstab GmbH  
+**Author:** Christian Schnapka / Embedded Principal+ Engineer  - Macstab GmbH  
 **Benchmark Date:** February 2026  
 **Environment:** OpenJDK 25.0.1, G1GC, 2GB heap, ARM64 (Apple Silicon)  
 **Redis:** Single instance (local network, no clustering)  
@@ -808,5 +808,5 @@ Configuration:
 **Repository:** https://github.com/macstab/spring-redis-laned  
 **Benchmark Data:** /redis-laned-benchmarks/build/reports/jmh/results.json (Backup of the JMH results run [results.json](/docs/results/results.json) is located at /docs/results/results.json)
 
-*By [Christian Schnapka (Per)](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
+*By [Christian Schnapka](https://macstab.com) · Principal+ Embedded Engineer · [Macstab GmbH](https://macstab.com)*
 

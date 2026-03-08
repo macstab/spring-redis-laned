@@ -91,6 +91,12 @@ public final class PubSubConnectionTracker {
    */
   CopyOnWriteArrayList<StatefulRedisPubSubConnection<?, ?>> connections;
 
+  /**
+   * Creates a Pub/Sub connection tracker.
+   *
+   * @param client Redis client (must not be null)
+   * @param codec codec for encoding/decoding (must not be null)
+   */
   public PubSubConnectionTracker(
       @NonNull final RedisClient client, @NonNull final RedisCodec<?, ?> codec) {
     this.client = client;
@@ -104,6 +110,9 @@ public final class PubSubConnectionTracker {
    * <p>{@code client.connectPubSub(codec)}: Netty channel creation (TCP handshake + AUTH),
    * pipeline: {@code ConnectionWatchdog} → {@code CommandEncoder} → {@code PubSubCommandHandler}
    * (NOT {@code CommandHandler} — handles push messages + FIFO).
+   *
+   * @return new Pub/Sub connection (tracked until released via {@link
+   *     #release(StatefulRedisPubSubConnection)})
    */
   public StatefulRedisPubSubConnection<?, ?> create() {
     final var connection = client.connectPubSub(codec);
@@ -131,6 +140,8 @@ public final class PubSubConnectionTracker {
    * <p>{@code connections.remove()}: {@code CopyOnWriteArrayList} creates new array WITHOUT
    * connection, volatile write (swap). Returns {@code true} if removed, {@code false} if already
    * released (idempotent). Then {@code close()}: QUIT + TCP FIN + FD release.
+   *
+   * @param connection connection to release (may be null, idempotent if already released)
    */
   public void release(final StatefulRedisPubSubConnection<?, ?> connection) {
     if (connection == null) {
@@ -152,6 +163,8 @@ public final class PubSubConnectionTracker {
    *
    * <p>Lock-free volatile read: {@code getArray().length} (volatile read of array reference +
    * length field). ~5-10ns.
+   *
+   * @return number of currently tracked Pub/Sub connections
    */
   public int getConnectionCount() {
     return connections.size();

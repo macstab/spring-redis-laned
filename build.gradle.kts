@@ -55,6 +55,14 @@ subprojects {
                     excludeTags(tag.trim())
                 }
             }
+            
+            // Support including tests by tag via system property (e.g., -Dtest.includeTags=integration)
+            val includeTags = System.getProperty("test.includeTags")
+            if (!includeTags.isNullOrBlank()) {
+                includeTags.split(",").forEach { tag ->
+                    includeTags(tag.trim())
+                }
+            }
         }
         testLogging {
             events("started", "passed", "skipped", "failed")
@@ -63,6 +71,30 @@ subprojects {
             showCauses = true
             showStackTraces = true
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+        
+        // Configure Testcontainers for Docker-in-Docker (DinD) environments
+        // Uses jvmArgs to set properties BEFORE any classes load
+        val dockerEnvFile = file("/.dockerenv")
+        if (dockerEnvFile.exists()) {
+            jvmArgs(
+                "-Ddocker.host=unix:///var/run/docker.sock",
+                "-Dtestcontainers.ryuk.disabled=true",
+                "-DDOCKER_HOST=unix:///var/run/docker.sock",
+                "-DTESTCONTAINERS_RYUK_DISABLED=true",
+                "-DDOCKER_API_VERSION=1.44",
+                "-Dapi.version=1.44",
+                "-Djava.util.logging.config.file=${project.file("src/test/resources/logging.properties").absolutePath}"
+            )
+            environment("DOCKER_HOST", "unix:///var/run/docker.sock")
+            environment("TESTCONTAINERS_RYUK_DISABLED", "true")
+            environment("DOCKER_API_VERSION", "1.44")
+            systemProperty("org.slf4j.simpleLogger.defaultLogLevel", "debug")
+            systemProperty("org.slf4j.simpleLogger.log.org.testcontainers", "debug")
+            systemProperty("org.slf4j.simpleLogger.log.com.github.dockerjava", "debug")
+            doFirst {
+                println("✓ DinD detected - Testcontainers JVM args configured")
+            }
         }
     }
 
