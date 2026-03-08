@@ -8,6 +8,9 @@ dependencies {
     testImplementation("io.lettuce:lettuce-core:6.7.1.RELEASE")
     testImplementation("ch.qos.logback:logback-classic:1.4.14")
     
+    // Test utilities (Redis + Sentinel annotations)
+    testImplementation(project(":redis-laned-test-utils"))
+    
     // Testcontainers for integration tests
     testImplementation("org.testcontainers:testcontainers:1.20.4")
     testImplementation("org.testcontainers:junit-jupiter:1.20.4")

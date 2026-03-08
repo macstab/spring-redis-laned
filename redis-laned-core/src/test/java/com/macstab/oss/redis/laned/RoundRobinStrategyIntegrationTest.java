@@ -20,13 +20,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
 import com.macstab.oss.redis.laned.strategy.RoundRobinStrategy;
+import com.macstab.oss.redis.laned.test.annotation.RedisStandalone;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -40,15 +37,11 @@ import io.lettuce.core.codec.StringCodec;
  *
  * @author Christian Schnapka - Macstab GmbH
  */
-@Testcontainers
+@RedisStandalone(
+    version = "7.4",
+    args = {"--save", "", "--appendonly", "no"})
 @DisplayName("RoundRobinStrategy (Integration)")
 class RoundRobinStrategyIntegrationTest {
-
-  @Container
-  private static final GenericContainer<?> REDIS =
-      new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-          .withExposedPorts(6379)
-          .withCommand("redis-server", "--save", "", "--appendonly", "no");
 
   private RedisClient client;
   private LanedConnectionManager manager;
@@ -56,10 +49,11 @@ class RoundRobinStrategyIntegrationTest {
 
   @BeforeEach
   void setUp() {
+    final var redis = RedisStandalone.INSTANCE.get();
     final var uri =
         RedisURI.builder()
-            .withHost(REDIS.getHost())
-            .withPort(REDIS.getFirstMappedPort())
+            .withHost(redis.getHost())
+            .withPort(redis.getPort())
             .withTimeout(Duration.ofSeconds(5))
             .build();
 

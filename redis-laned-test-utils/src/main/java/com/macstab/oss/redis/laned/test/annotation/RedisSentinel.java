@@ -11,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 
 import com.macstab.oss.redis.laned.test.condition.DisabledOnNonLinuxHost;
 import com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension;
+import com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension.SentinelCluster;
 
 /**
  * Starts a full Redis Sentinel cluster for integration tests using Testcontainers.
@@ -79,6 +80,31 @@ import com.macstab.oss.redis.laned.test.extension.SentinelContainerExtension;
 @DisabledOnNonLinuxHost(
     "Redis Sentinel tests require native Docker networking (Linux host or dev container)")
 public @interface RedisSentinel {
+
+  /**
+   * Manager instance for programmatic access.
+   *
+   * <p>Usage: {@code RedisSentinel.INSTANCE.get("id")}
+   */
+  RedisManager<SentinelCluster> INSTANCE =
+      new RedisManager<SentinelCluster>(SentinelContainerExtension::getCluster);
+
+  /**
+   * Cluster ID (unique within test class).
+   *
+   * <p>Default: {@code "default"}
+   *
+   * <p>Use when you need multiple Sentinel clusters:
+   *
+   * <pre>{@code
+   * @RedisSentinel(id = "primary", replicas = 2)
+   * @RedisSentinel(id = "secondary", replicas = 1)
+   * class MultiClusterTest { ... }
+   * }</pre>
+   *
+   * @return cluster ID
+   */
+  String id() default "default";
 
   /**
    * Redis Docker image version tag.

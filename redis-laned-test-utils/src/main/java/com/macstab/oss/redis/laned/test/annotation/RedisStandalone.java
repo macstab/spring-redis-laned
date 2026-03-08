@@ -10,6 +10,7 @@ import java.lang.annotation.Target;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 import com.macstab.oss.redis.laned.test.extension.RedisContainerExtension;
+import com.macstab.oss.redis.laned.test.extension.RedisContainerExtension.RedisConnectionInfo;
 
 /**
  * Starts a standalone Redis container for integration tests using Testcontainers.
@@ -59,6 +60,31 @@ import com.macstab.oss.redis.laned.test.extension.RedisContainerExtension;
 @Documented
 @ExtendWith(RedisContainerExtension.class)
 public @interface RedisStandalone {
+
+  /**
+   * Manager instance for programmatic access.
+   *
+   * <p>Usage: {@code RedisStandalone.INSTANCE.get("id")}
+   */
+  RedisManager<RedisConnectionInfo> INSTANCE =
+      new RedisManager<RedisConnectionInfo>(RedisContainerExtension::getContainer);
+
+  /**
+   * Container ID (unique within test class).
+   *
+   * <p>Default: {@code "default"}
+   *
+   * <p>Use when you need multiple Redis containers:
+   *
+   * <pre>{@code
+   * @RedisStandalone(id = "master", version = "7.4")
+   * @RedisStandalone(id = "cache", version = "7.2")
+   * class MultiRedisTest { ... }
+   * }</pre>
+   *
+   * @return container ID
+   */
+  String id() default "default";
 
   /**
    * Redis Docker image version tag.

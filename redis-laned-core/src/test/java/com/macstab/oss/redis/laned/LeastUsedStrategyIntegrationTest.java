@@ -11,7 +11,6 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -20,13 +19,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
 import com.macstab.oss.redis.laned.strategy.LeastUsedStrategy;
+import com.macstab.oss.redis.laned.test.annotation.RedisStandalone;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -69,16 +65,10 @@ import io.lettuce.core.codec.StringCodec;
  *
  * @author Christian Schnapka - Macstab GmbH
  */
-@Testcontainers
+@RedisStandalone(version = "7.4")
 @Tag("integration")
 @DisplayName("LeastUsedStrategy Integration Tests (Real Redis)")
 class LeastUsedStrategyIntegrationTest {
-
-  @Container
-  private static final GenericContainer<?> REDIS =
-      new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-          .withExposedPorts(6379)
-          .withStartupTimeout(Duration.ofSeconds(30));
 
   private RedisClient client;
   private LanedConnectionManager manager;
@@ -88,9 +78,9 @@ class LeastUsedStrategyIntegrationTest {
   @BeforeEach
   void setUp() {
     // Arrange: Create RedisClient + manager with LeastUsedStrategy
-    final String host = REDIS.getHost();
-    final Integer port = REDIS.getFirstMappedPort();
-    final RedisURI uri = RedisURI.builder().withHost(host).withPort(port).build();
+    final var redis = RedisStandalone.INSTANCE.get();
+    final RedisURI uri =
+        RedisURI.builder().withHost(redis.getHost()).withPort(redis.getPort()).build();
 
     client = RedisClient.create(uri);
     mockMetrics = mock(LanedRedisMetrics.class);
@@ -632,12 +622,7 @@ class LeastUsedStrategyIntegrationTest {
       final LeastUsedStrategy strategy = new LeastUsedStrategy();
       final var singleLaneManager =
           new LanedConnectionManager(
-              client,
-              StringCodec.UTF8,
-              1,
-              strategy,
-              Optional.of(singleLaneMetrics),
-              "single-lane");
+              client, StringCodec.UTF8, 1, strategy, Optional.of(singleLaneMetrics), "single-lane");
 
       try {
         // ACT: Execute multiple commands

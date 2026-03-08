@@ -27,13 +27,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
 import com.macstab.oss.redis.laned.strategy.KeyAffinityStrategy;
+import com.macstab.oss.redis.laned.test.annotation.RedisStandalone;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -53,15 +50,11 @@ import io.lettuce.core.codec.StringCodec;
  *   <li>Thread safety with concurrent commands
  * </ul>
  */
-@Testcontainers
+@RedisStandalone(
+    version = "7.4",
+    args = {"--save", "", "--appendonly", "no"})
 @DisplayName("KeyAffinityConnectionWrapper (Integration)")
 class KeyAffinityConnectionWrapperIntegrationTest {
-
-  @Container
-  private static final GenericContainer<?> REDIS =
-      new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-          .withExposedPorts(6379)
-          .withCommand("redis-server", "--save", "", "--appendonly", "no");
 
   private RedisClient client;
   private LanedConnectionManager manager;
@@ -69,10 +62,11 @@ class KeyAffinityConnectionWrapperIntegrationTest {
 
   @BeforeEach
   void setUp() {
+    final var redis = RedisStandalone.INSTANCE.get();
     final var uri =
         RedisURI.builder()
-            .withHost(REDIS.getHost())
-            .withPort(REDIS.getFirstMappedPort())
+            .withHost(redis.getHost())
+            .withPort(redis.getPort())
             .withTimeout(Duration.ofSeconds(5))
             .build();
 
@@ -835,8 +829,7 @@ class KeyAffinityConnectionWrapperIntegrationTest {
 
       // Act: Access same key from 10 different wrappers
       for (int i = 0; i < numAccesses; i++) {
-        final var wrapper =
-            (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
+        final var wrapper = (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
         wrapper.sync().set(key, "value" + i);
         wrapper.sync().get(key);
 

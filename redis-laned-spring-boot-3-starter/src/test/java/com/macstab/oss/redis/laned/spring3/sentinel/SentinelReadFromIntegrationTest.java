@@ -93,9 +93,9 @@ class SentinelReadFromIntegrationTest {
             });
 
     // When: Start command tracking on all nodes
-    final var masterMonitor = new RedisCommandTracker(cluster.getMaster());
-    final var replica1Monitor = new RedisCommandTracker(cluster.getReplicas().get(0));
-    final var replica2Monitor = new RedisCommandTracker(cluster.getReplicas().get(1));
+    final var masterMonitor = new RedisCommandTracker(cluster.getMasterContainer());
+    final var replica1Monitor = new RedisCommandTracker(cluster.getReplicaContainers().get(0));
+    final var replica2Monitor = new RedisCommandTracker(cluster.getReplicaContainers().get(1));
 
     masterMonitor.start();
     replica1Monitor.start();
@@ -142,9 +142,9 @@ class SentinelReadFromIntegrationTest {
   @DisplayName("Should route all writes to master")
   void writesGoToMaster() throws Exception {
     // When: Start command tracking
-    final var masterMonitor = new RedisCommandTracker(cluster.getMaster());
-    final var replica1Monitor = new RedisCommandTracker(cluster.getReplicas().get(0));
-    final var replica2Monitor = new RedisCommandTracker(cluster.getReplicas().get(1));
+    final var masterMonitor = new RedisCommandTracker(cluster.getMasterContainer());
+    final var replica1Monitor = new RedisCommandTracker(cluster.getReplicaContainers().get(0));
+    final var replica2Monitor = new RedisCommandTracker(cluster.getReplicaContainers().get(1));
 
     masterMonitor.start();
     replica1Monitor.start();

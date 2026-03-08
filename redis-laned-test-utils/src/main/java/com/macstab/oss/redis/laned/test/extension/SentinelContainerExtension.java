@@ -11,8 +11,10 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 
 import com.macstab.oss.redis.laned.test.annotation.RedisSentinel;
+import com.macstab.oss.redis.laned.test.extension.RedisContainerExtension.RedisConnectionInfo;
 import com.macstab.oss.redis.laned.test.factory.RedisContainerFactory;
 
+import io.lettuce.core.RedisURI;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -57,7 +59,10 @@ public final class SentinelContainerExtension
   private static final ExtensionContext.Namespace NAMESPACE =
       ExtensionContext.Namespace.create(SentinelContainerExtension.class);
 
-  private static final String CLUSTER_KEY = "sentinel-cluster";
+  private static final String CLUSTER_KEY_PREFIX = "sentinel-cluster-";
+
+  /** ThreadLocal to hold current test context for INSTANCE.get() calls. */
+  private static final ThreadLocal<ExtensionContext> CURRENT_CONTEXT = new ThreadLocal<>();
 
   /**
    * System property key for sentinel nodes (for Spring @TestPropertySource
@@ -77,6 +82,11 @@ public final class SentinelContainerExtension
 
   @Override
   public void beforeAll(final ExtensionContext context) {
+    CURRENT_CONTEXT.set(context); // Store context for static INSTANCE.get() access
+
+    // Register automatic ThreadLocal cleanup (primary mechanism via CloseableResource)
+    context.getStore(NAMESPACE).put("threadlocal-cleanup", new ThreadLocalCleanup());
+
     final var annotation = context.getRequiredTestClass().getAnnotation(RedisSentinel.class);
 
     if (annotation == null) {
@@ -84,36 +94,79 @@ public final class SentinelContainerExtension
       return;
     }
 
+    final String id = annotation.id();
     final var cluster = createCluster(annotation);
     cluster.start();
 
     // Expose sentinel nodes as system property for Spring Boot @TestPropertySource /
     // @DynamicPropertySource
-    final var sentinelNodes =
-        cluster.getSentinels().get(0).getHost()
-            + ":"
-            + cluster.getSentinels().get(0).getMappedPort(26379);
+    final var firstSentinel = cluster.getSentinels().get(0);
+    final var sentinelNodes = firstSentinel.getHost() + ":" + firstSentinel.getPort();
     System.setProperty(SENTINEL_NODES_PROPERTY, sentinelNodes);
 
     log.info(
-        "Started Redis Sentinel cluster: master={}:{}, replicas={}, sentinels={}, sentinelNodes={}",
+        "Started Redis Sentinel cluster (id={}): master={}:{}, replicas={}, sentinels={}, sentinelNodes={}",
+        id,
         cluster.getMasterHost(),
         cluster.getMasterPort(),
         annotation.replicas(),
         annotation.sentinels(),
         sentinelNodes);
 
-    context.getStore(NAMESPACE).put(CLUSTER_KEY, cluster);
+    // Store with ID-specific key for multi-cluster support
+    context.getStore(NAMESPACE).put(CLUSTER_KEY_PREFIX + id, cluster);
   }
 
+  /**
+   * Cleanup after all tests.
+   *
+   * <p><strong>Defensive Cleanup:</strong> ThreadLocal cleanup happens via both {@link
+   * ThreadLocalCleanup#close()} (primary, automatic) and manual removal here (backup). This
+   * "belt and suspenders" approach ensures no leaks even if JUnit lifecycle is interrupted.
+   *
+   * @param context test context
+   */
   @Override
   public void afterAll(final ExtensionContext context) {
-    final var cluster = context.getStore(NAMESPACE).get(CLUSTER_KEY, SentinelCluster.class);
-    if (cluster != null) {
-      log.info("Stopping Redis Sentinel cluster");
-      cluster.stop();
-      System.clearProperty(SENTINEL_NODES_PROPERTY);
+    CURRENT_CONTEXT.remove(); // Defensive backup cleanup (primary is ThreadLocalCleanup.close())
+    System.clearProperty(SENTINEL_NODES_PROPERTY);
+    // Clusters auto-stop via SentinelCluster lifecycle
+  }
+
+  /**
+   * Public accessor for {@link com.macstab.oss.redis.laned.test.annotation.RedisManager}.
+   *
+   * <p>Called via {@code RedisSentinel.INSTANCE.get(id)}.
+   *
+   * <p><strong>Note:</strong> This is public for annotation access but should not be called
+   * directly by tests. Use {@code RedisSentinel.INSTANCE.get(id)} instead.
+   *
+   * @param id cluster ID from {@code @RedisSentinel(id = "...")}
+   * @return cluster info
+   * @throws IllegalArgumentException if ID not found
+   * @throws IllegalStateException if called outside test context
+   */
+  public static SentinelCluster getCluster(final String id) {
+    final var context = CURRENT_CONTEXT.get();
+    if (context == null) {
+      throw new IllegalStateException(
+          "RedisSentinel.INSTANCE.get() called outside @RedisSentinel test context. "
+              + "Ensure your test class is annotated with @RedisSentinel.");
     }
+
+    final var cluster =
+        context.getStore(NAMESPACE).get(CLUSTER_KEY_PREFIX + id, SentinelCluster.class);
+    if (cluster == null) {
+      throw new IllegalArgumentException(
+          "No Sentinel cluster found with id='"
+              + id
+              + "'. "
+              + "Did you add @RedisSentinel(id = \""
+              + id
+              + "\") to your test class?");
+    }
+
+    return cluster;
   }
 
   @Override
@@ -127,7 +180,10 @@ public final class SentinelContainerExtension
   public Object resolveParameter(
       final org.junit.jupiter.api.extension.ParameterContext parameterContext,
       final ExtensionContext extensionContext) {
-    return extensionContext.getStore(NAMESPACE).get(CLUSTER_KEY, SentinelCluster.class);
+    // For backward compatibility with @BeforeAll parameter injection
+    return extensionContext
+        .getStore(NAMESPACE)
+        .get(CLUSTER_KEY_PREFIX + "default", SentinelCluster.class);
   }
 
   /**
@@ -155,8 +211,18 @@ public final class SentinelContainerExtension
    * Sentinel cluster holder (network + all containers).
    *
    * <p>Implements {@link ExtensionContext.Store.CloseableResource} for automatic cleanup.
+   *
+   * <p><strong>API Design:</strong> Provides two access patterns:
+   *
+   * <ul>
+   *   <li><strong>Container access</strong> (monitoring/tracking): {@code getMasterContainer()},
+   *       {@code getReplicaContainers()}, {@code getSentinelContainers()} return raw {@code
+   *       GenericContainer<?>} for MONITOR command, log inspection, etc.
+   *   <li><strong>Connection info access</strong> (common use case): {@code getMaster()}, {@code
+   *       getReplicas()}, {@code getSentinels()} return {@link RedisConnectionInfo} for Lettuce
+   *       client setup.
+   * </ul>
    */
-  @Getter
   public static final class SentinelCluster implements ExtensionContext.Store.CloseableResource {
     private final Network network;
     private final GenericContainer<?> master;
@@ -201,8 +267,57 @@ public final class SentinelContainerExtension
       network.close();
     }
 
+    // ==================== Container Access (for monitoring/tracking) ====================
+
     /**
-     * Returns master container host (for direct connections).
+     * Returns master container (for monitoring, log inspection, etc.).
+     *
+     * @return master container
+     */
+    public GenericContainer<?> getMasterContainer() {
+      return master;
+    }
+
+    /**
+     * Returns replica containers (for monitoring, log inspection, etc.).
+     *
+     * @return replica containers (may be empty)
+     */
+    public List<GenericContainer<?>> getReplicaContainers() {
+      return List.copyOf(replicas); // Defensive copy
+    }
+
+    /**
+     * Returns Sentinel containers (for monitoring, log inspection, etc.).
+     *
+     * @return Sentinel containers (typically 3 or 5)
+     */
+    public List<GenericContainer<?>> getSentinelContainers() {
+      return List.copyOf(sentinels); // Defensive copy
+    }
+
+    /**
+     * Returns Docker network.
+     *
+     * @return network (shared across all containers)
+     */
+    public Network getNetwork() {
+      return network;
+    }
+
+    /**
+     * Returns Sentinel master name.
+     *
+     * @return master name (e.g., "mymaster")
+     */
+    public String getMasterName() {
+      return masterName;
+    }
+
+    // ==================== Connection Info Access (common use case) ====================
+
+    /**
+     * Returns master container host.
      *
      * @return container host (typically "localhost" on Linux host, or Docker host IP)
      */
@@ -219,9 +334,79 @@ public final class SentinelContainerExtension
       return master.getMappedPort(6379);
     }
 
+    /**
+     * Returns master connection info (for Lettuce client setup).
+     *
+     * @return master connection info (host + port)
+     */
+    public RedisConnectionInfo getMaster() {
+      return new RedisConnectionInfo(getMasterHost(), getMasterPort());
+    }
+
+    /**
+     * Returns replica connection info list (for Lettuce client setup).
+     *
+     * @return replica connection info list (may be empty)
+     */
+    public List<RedisConnectionInfo> getReplicas() {
+      return replicas.stream()
+          .map(r -> new RedisConnectionInfo(r.getHost(), r.getMappedPort(6379)))
+          .toList();
+    }
+
+    /**
+     * Returns Sentinel connection info list (for Lettuce Sentinel client setup).
+     *
+     * @return Sentinel connection info list (typically 3 or 5)
+     */
+    public List<RedisConnectionInfo> getSentinels() {
+      return sentinels.stream()
+          .map(s -> new RedisConnectionInfo(s.getHost(), s.getMappedPort(26379)))
+          .toList();
+    }
+
+    /**
+     * Returns master as RedisURI (convenience for Lettuce client creation).
+     *
+     * @return RedisURI for master node
+     */
+    public RedisURI getMasterURI() {
+      return RedisURI.builder().withHost(getMasterHost()).withPort(getMasterPort()).build();
+    }
+
+    /**
+     * Returns Sentinel nodes as RedisURIs (for Lettuce Sentinel client).
+     *
+     * @return List of Sentinel RedisURIs
+     */
+    public List<RedisURI> getSentinelURIs() {
+      return getSentinels().stream()
+          .map(s -> RedisURI.builder().withHost(s.getHost()).withPort(s.getPort()).build())
+          .toList();
+    }
+
     @Override
     public void close() {
       stop();
+    }
+  }
+
+  /**
+   * ThreadLocal cleanup wrapper for automatic resource management.
+   *
+   * <p>Implements {@link ExtensionContext.Store.CloseableResource} to ensure ThreadLocal is
+   * cleaned up automatically by JUnit 5 (primary mechanism). Manual cleanup in {@link
+   * #afterAll(ExtensionContext)} serves as defensive backup.
+   *
+   * <p><strong>Defensive Design:</strong> Both automatic and manual cleanup ensure no ThreadLocal
+   * leaks, even if JUnit lifecycle is interrupted.
+   */
+  private static final class ThreadLocalCleanup
+      implements ExtensionContext.Store.CloseableResource {
+
+    @Override
+    public void close() {
+      CURRENT_CONTEXT.remove(); // JUnit calls this automatically when test scope ends
     }
   }
 }

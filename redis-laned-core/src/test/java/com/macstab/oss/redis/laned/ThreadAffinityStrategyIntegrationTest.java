@@ -9,8 +9,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -23,13 +21,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
 import com.macstab.oss.redis.laned.strategy.ThreadAffinityStrategy;
+import com.macstab.oss.redis.laned.test.annotation.RedisStandalone;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -43,15 +38,11 @@ import io.lettuce.core.codec.StringCodec;
  *
  * @author Christian Schnapka - Macstab GmbH
  */
-@Testcontainers
+@RedisStandalone(
+    version = "7.4",
+    args = {"--save", "", "--appendonly", "no"})
 @DisplayName("ThreadAffinityStrategy (Integration)")
 class ThreadAffinityStrategyIntegrationTest {
-
-  @Container
-  private static final GenericContainer<?> REDIS =
-      new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-          .withExposedPorts(6379)
-          .withCommand("redis-server", "--save", "", "--appendonly", "no");
 
   private RedisClient client;
   private LanedConnectionManager manager;
@@ -59,10 +50,11 @@ class ThreadAffinityStrategyIntegrationTest {
 
   @BeforeEach
   void setUp() {
+    final var redis = RedisStandalone.INSTANCE.get();
     final var uri =
         RedisURI.builder()
-            .withHost(REDIS.getHost())
-            .withPort(REDIS.getFirstMappedPort())
+            .withHost(redis.getHost())
+            .withPort(redis.getPort())
             .withTimeout(Duration.ofSeconds(5))
             .build();
 

@@ -48,8 +48,11 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
   private static final ExtensionContext.Namespace NAMESPACE =
       ExtensionContext.Namespace.create(RedisContainerExtension.class);
 
-  /** Store key for Redis container. */
-  private static final String CONTAINER_KEY = "redis-container";
+  /** Store key prefix for Redis containers (suffixed with ID). */
+  private static final String CONTAINER_KEY_PREFIX = "redis-container-";
+
+  /** ThreadLocal to hold current test context for INSTANCE.get() calls. */
+  private static final ThreadLocal<ExtensionContext> CURRENT_CONTEXT = new ThreadLocal<>();
 
   /**
    * Creates a Redis container extension.
@@ -68,6 +71,11 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
    */
   @Override
   public void beforeAll(final ExtensionContext context) {
+    CURRENT_CONTEXT.set(context); // Store context for static INSTANCE.get() access
+
+    // Register automatic ThreadLocal cleanup (primary mechanism via CloseableResource)
+    context.getStore(NAMESPACE).put("threadlocal-cleanup", new ThreadLocalCleanup());
+
     final var annotation = context.getRequiredTestClass().getAnnotation(RedisStandalone.class);
 
     if (annotation == null) {
@@ -75,6 +83,7 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
       return;
     }
 
+    final String id = annotation.id();
     final var container = createContainer(annotation);
     container.start();
 
@@ -82,27 +91,66 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
         new RedisConnectionInfo(container.getHost(), container.getMappedPort(6379));
 
     log.info(
-        "Started Redis {} container: {}:{}",
+        "Started Redis {} container (id={}): {}:{}",
         annotation.version(),
+        id,
         connectionInfo.getHost(),
         connectionInfo.getPort());
 
-    // Store in ExtensionContext for access by tests + cleanup
-    context.getStore(NAMESPACE).put(CONTAINER_KEY, new Store(container, connectionInfo));
+    // Store with ID-specific key for multi-container support
+    context
+        .getStore(NAMESPACE)
+        .put(CONTAINER_KEY_PREFIX + id, new Store(container, connectionInfo));
   }
 
   /**
    * Stop Redis container after all tests (automatic via Testcontainers AutoCloseable).
    *
+   * <p><strong>Defensive Cleanup:</strong> ThreadLocal cleanup happens via both {@link
+   * ThreadLocalCleanup#close()} (primary, automatic) and manual removal here (backup). This
+   * "belt and suspenders" approach ensures no leaks even if JUnit lifecycle is interrupted.
+   *
    * @param context test context
    */
   @Override
   public void afterAll(final ExtensionContext context) {
-    final var store = context.getStore(NAMESPACE).get(CONTAINER_KEY, Store.class);
-    if (store != null) {
-      log.info("Stopping Redis container");
-      store.container.stop();
+    CURRENT_CONTEXT.remove(); // Defensive backup cleanup (primary is ThreadLocalCleanup.close())
+    // Containers auto-stop via Store.CloseableResource
+  }
+
+  /**
+   * Public accessor for {@link com.macstab.oss.redis.laned.test.annotation.RedisManager}.
+   *
+   * <p>Called via {@code RedisStandalone.INSTANCE.get(id)}.
+   *
+   * <p><strong>Note:</strong> This is public for annotation access but should not be called
+   * directly by tests. Use {@code RedisStandalone.INSTANCE.get(id)} instead.
+   *
+   * @param id container ID from {@code @RedisStandalone(id = "...")}
+   * @return connection info
+   * @throws IllegalArgumentException if ID not found
+   * @throws IllegalStateException if called outside test context
+   */
+  public static RedisConnectionInfo getContainer(final String id) {
+    final var context = CURRENT_CONTEXT.get();
+    if (context == null) {
+      throw new IllegalStateException(
+          "RedisStandalone.INSTANCE.get() called outside @RedisStandalone test context. "
+              + "Ensure your test class is annotated with @RedisStandalone.");
     }
+
+    final var store = context.getStore(NAMESPACE).get(CONTAINER_KEY_PREFIX + id, Store.class);
+    if (store == null) {
+      throw new IllegalArgumentException(
+          "No Redis container found with id='"
+              + id
+              + "'. "
+              + "Did you add @RedisStandalone(id = \""
+              + id
+              + "\") to your test class?");
+    }
+
+    return store.getConnectionInfo();
   }
 
   /**
@@ -185,6 +233,25 @@ public final class RedisContainerExtension implements BeforeAllCallback, AfterAl
     @Override
     public String toString() {
       return host + ":" + port;
+    }
+  }
+
+  /**
+   * ThreadLocal cleanup wrapper for automatic resource management.
+   *
+   * <p>Implements {@link ExtensionContext.Store.CloseableResource} to ensure ThreadLocal is
+   * cleaned up automatically by JUnit 5 (primary mechanism). Manual cleanup in {@link
+   * #afterAll(ExtensionContext)} serves as defensive backup.
+   *
+   * <p><strong>Defensive Design:</strong> Both automatic and manual cleanup ensure no ThreadLocal
+   * leaks, even if JUnit lifecycle is interrupted.
+   */
+  private static final class ThreadLocalCleanup
+      implements ExtensionContext.Store.CloseableResource {
+
+    @Override
+    public void close() {
+      CURRENT_CONTEXT.remove(); // JUnit calls this automatically when test scope ends
     }
   }
 }
