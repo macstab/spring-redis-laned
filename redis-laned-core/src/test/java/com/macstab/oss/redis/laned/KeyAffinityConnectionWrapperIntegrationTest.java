@@ -2,10 +2,17 @@
 package com.macstab.oss.redis.laned;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -25,6 +32,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import com.macstab.oss.redis.laned.metrics.LanedRedisMetrics;
 import com.macstab.oss.redis.laned.strategy.KeyAffinityStrategy;
 
 import io.lettuce.core.RedisClient;
@@ -57,6 +65,7 @@ class KeyAffinityConnectionWrapperIntegrationTest {
 
   private RedisClient client;
   private LanedConnectionManager manager;
+  private LanedRedisMetrics mockMetrics;
 
   @BeforeEach
   void setUp() {
@@ -68,7 +77,15 @@ class KeyAffinityConnectionWrapperIntegrationTest {
             .build();
 
     client = RedisClient.create(uri);
-    manager = new LanedConnectionManager(client, StringCodec.UTF8, 8, new KeyAffinityStrategy());
+    mockMetrics = mock(LanedRedisMetrics.class);
+    manager =
+        new LanedConnectionManager(
+            client,
+            StringCodec.UTF8,
+            8,
+            new KeyAffinityStrategy(),
+            Optional.of(mockMetrics),
+            "default");
   }
 
   @AfterEach
@@ -125,11 +142,12 @@ class KeyAffinityConnectionWrapperIntegrationTest {
       // Arrange
       final var wrapper = (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
       final io.lettuce.core.api.async.RedisAsyncCommands<String, String> async = wrapper.async();
+      final var key = "basicexec:hgetall:" + System.currentTimeMillis();
 
       // Act
-      async.hset("user:789", "name", "Bob").toCompletableFuture().join();
-      async.hset("user:789", "age", "30").toCompletableFuture().join();
-      final var result = async.hgetall("user:789").toCompletableFuture().join();
+      async.hset(key, "name", "Bob").toCompletableFuture().join();
+      async.hset(key, "age", "30").toCompletableFuture().join();
+      final var result = async.hgetall(key).toCompletableFuture().join();
 
       // Assert
       assertThat(result).containsEntry("name", "Bob").containsEntry("age", "30");
@@ -731,6 +749,327 @@ class KeyAffinityConnectionWrapperIntegrationTest {
     final var ref = (AtomicReference<ConnectionLane>) field.get(wrapper);
     final var lane = ref.get();
     return lane == null ? -1 : lane.getIndex();
+  }
+
+  @Nested
+  @DisplayName("Key-Based Commands (PRIMARY USE CASE)")
+  class KeyBasedCommands {
+
+    @Test
+    @DisplayName("concurrent key-based commands distribute by key hash (10k keys, 100 threads)")
+    void concurrentKeyBasedCommands() throws Exception {
+      // Arrange
+      final int totalKeys = 10_000;
+      final var laneUsageByKey = new ConcurrentHashMap<String, Integer>();
+      final var errors = new ConcurrentLinkedQueue<Throwable>();
+
+      // Act: 10,000 virtual threads × 1 key each = 10,000 unique keys
+      // Each wrapper processes ONE key (tests key distribution, not wrapper reuse)
+      try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        for (int keyId = 0; keyId < totalKeys; keyId++) {
+          final int id = keyId;
+          executor.submit(
+              () -> {
+                try {
+                  final var key = "user:" + id;
+                  final var wrapper =
+                      (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
+
+                  wrapper.sync().set(key, "value" + id);
+                  wrapper.sync().get(key);
+
+                  // Track which lane this key selected
+                  final int lane = getSelectedLaneIndex(wrapper);
+                  laneUsageByKey.put(key, lane);
+
+                  wrapper.close();
+                } catch (Exception e) {
+                  errors.add(e);
+                }
+              });
+        }
+      } // Executor auto-waits for all virtual threads to complete
+
+      // Assert: No exceptions during execution
+      assertThat(errors).as("No exceptions during concurrent key-based commands").isEmpty();
+
+      // Assert: All 10,000 keys recorded
+      assertThat(laneUsageByKey).hasSize(totalKeys);
+
+      // Calculate lane distribution
+      final var laneDistribution = new HashMap<Integer, AtomicInteger>();
+      laneUsageByKey
+          .values()
+          .forEach(
+              lane ->
+                  laneDistribution
+                      .computeIfAbsent(lane, k -> new AtomicInteger())
+                      .incrementAndGet());
+
+      System.out.printf("Key-based command distribution (%d keys):%n", totalKeys);
+      laneDistribution.forEach(
+          (lane, count) -> System.out.printf("  Lane %d: %,d keys%n", lane, count.get()));
+
+      // Assert: All 8 lanes used
+      assertThat(laneDistribution).as("All 8 lanes should be used for 10,000 keys").hasSize(8);
+
+      // Assert: Each lane handles ~1,250 keys (10000/8 ± 20%)
+      for (var entry : laneDistribution.entrySet()) {
+        assertThat(entry.getValue().get())
+            .as("Lane %d should handle ~1,250 keys (10000/8 ± 20%%)", entry.getKey())
+            .isBetween(1000, 1500);
+      }
+
+      // Assert: Metrics recorded for all 10,000 wrappers
+      verify(mockMetrics, times(totalKeys))
+          .recordLaneSelection(eq("default"), anyInt(), eq("key-affinity"));
+    }
+
+    @Test
+    @DisplayName("same key always routes to same lane (determinism)")
+    void sameKeyDeterminism() throws Exception {
+      // Arrange
+      final var key = "user:determinism-test";
+      final int numAccesses = 10;
+      final var laneSamples = new ArrayList<Integer>();
+
+      // Act: Access same key from 10 different wrappers
+      for (int i = 0; i < numAccesses; i++) {
+        final var wrapper =
+            (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
+        wrapper.sync().set(key, "value" + i);
+        wrapper.sync().get(key);
+
+        laneSamples.add(getSelectedLaneIndex(wrapper));
+        wrapper.close();
+      }
+
+      // Assert: All accesses routed to SAME lane
+      final int firstLane = laneSamples.get(0);
+      assertThat(laneSamples)
+          .as("Same key '%s' should always route to lane %d (determinism)", key, firstLane)
+          .allMatch(lane -> lane == firstLane);
+
+      System.out.printf(
+          "Determinism test: Key '%s' consistently routed to lane %d (%d accesses)%n",
+          key, firstLane, numAccesses);
+
+      // Assert: Metrics recorded for all 10 wrappers
+      verify(mockMetrics, times(numAccesses))
+          .recordLaneSelection(eq("default"), eq(firstLane), eq("key-affinity"));
+    }
+
+    @Test
+    @DisplayName("different keys with same prefix distribute uniformly")
+    void samePrefixDifferentDistribution() throws Exception {
+      // Arrange
+      final var prefix = "session:";
+      final int numKeys = 1000;
+      final var laneDistribution = new HashMap<Integer, AtomicInteger>();
+
+      // Act: Create 1000 keys with same prefix
+      try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        for (int i = 0; i < numKeys; i++) {
+          final int keyId = i;
+          executor.submit(
+              () -> {
+                try {
+                  final var key = prefix + keyId;
+                  final var wrapper =
+                      (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
+                  wrapper.sync().set(key, "value" + keyId);
+
+                  final int lane = getSelectedLaneIndex(wrapper);
+                  synchronized (laneDistribution) {
+                    laneDistribution
+                        .computeIfAbsent(lane, k -> new AtomicInteger())
+                        .incrementAndGet();
+                  }
+
+                  wrapper.close();
+                } catch (Exception e) {
+                  throw new RuntimeException(e);
+                }
+              });
+        }
+      }
+
+      // Assert: All 8 lanes used
+      assertThat(laneDistribution).hasSize(8);
+
+      // Assert: Each lane gets ~125 keys (1000/8 ± 20%)
+      for (var entry : laneDistribution.entrySet()) {
+        assertThat(entry.getValue().get())
+            .as("Lane %d should handle ~125 keys (1000/8 ± 20%%)", entry.getKey())
+            .isBetween(100, 150);
+      }
+
+      // Assert: Metrics recorded for all 1000 wrappers
+      verify(mockMetrics, times(numKeys))
+          .recordLaneSelection(eq("default"), anyInt(), eq("key-affinity"));
+    }
+
+    @Test
+    @DisplayName("hash commands (HSET/HGET) work with key-based routing")
+    void hashCommands() throws Exception {
+      // Arrange
+      final var key = "keyaffinity:hashtest:" + System.currentTimeMillis();
+      final var wrapper = (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
+
+      // Act
+      wrapper.sync().hset(key, "name", "Alice");
+      wrapper.sync().hset(key, "age", "30");
+      final var name = wrapper.sync().hget(key, "name");
+      final var age = wrapper.sync().hget(key, "age");
+      final var all = wrapper.sync().hgetall(key);
+
+      // Assert
+      assertThat(name).isEqualTo("Alice");
+      assertThat(age).isEqualTo("30");
+      assertThat(all).containsEntry("name", "Alice").containsEntry("age", "30");
+
+      // Assert: Metrics recorded once (single wrapper)
+      verify(mockMetrics, times(1))
+          .recordLaneSelection(eq("default"), anyInt(), eq("key-affinity"));
+
+      wrapper.close();
+    }
+  }
+
+  @Nested
+  @DisplayName("Virtual Thread Scale (CI-Safe)")
+  class VirtualThreadScale {
+
+    @Test
+    @DisplayName("1000 virtual threads creating wrappers (GitHub runner safe)")
+    void virtualThreadScaleTest() throws Exception {
+      // Arrange
+      final int numVirtualThreads = 1000;
+      final var latch = new CountDownLatch(numVirtualThreads);
+      final var errors = new ConcurrentLinkedQueue<Throwable>();
+      final var laneUsage = new ConcurrentHashMap<Integer, AtomicInteger>();
+
+      final long startTime = System.currentTimeMillis();
+
+      // Act: 1000 virtual threads (lightweight, CI-safe)
+      try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        for (int i = 0; i < numVirtualThreads; i++) {
+          executor.submit(
+              () -> {
+                try {
+                  final var wrapper =
+                      (KeyAffinityConnectionWrapper<String, String>) manager.getConnection();
+                  wrapper.sync().ping();
+                  final int lane = getSelectedLaneIndex(wrapper);
+                  laneUsage.computeIfAbsent(lane, k -> new AtomicInteger()).incrementAndGet();
+                  wrapper.close();
+                } catch (Throwable t) {
+                  errors.add(t);
+                } finally {
+                  latch.countDown();
+                }
+              });
+        }
+
+        // Wait for completion (timeout = 30 seconds)
+        assertThat(latch.await(30, TimeUnit.SECONDS))
+            .as("All 1000 virtual threads completed within 30 seconds")
+            .isTrue();
+      }
+
+      final long duration = System.currentTimeMillis() - startTime;
+
+      // Assert: No exceptions
+      assertThat(errors).as("No exceptions during 1000 virtual thread execution").isEmpty();
+
+      // Assert: All 8 lanes used
+      assertThat(laneUsage).as("All 8 lanes should be used").hasSize(8);
+
+      // Assert: Each lane handles ~125 wrappers (1000/8 ± 20%)
+      for (var entry : laneUsage.entrySet()) {
+        assertThat(entry.getValue().get())
+            .as("Lane %d should handle ~125 wrappers (1000/8 ± 20%%)", entry.getKey())
+            .isBetween(100, 150);
+      }
+
+      // Log performance
+      System.out.printf("Virtual thread scale test: 1000 threads completed in %,d ms%n", duration);
+      System.out.printf("Lane distribution:%n");
+      laneUsage.forEach(
+          (lane, count) -> System.out.printf("  Lane %d: %d wrappers%n", lane, count.get()));
+
+      // Assert: Metrics recorded for all 1000 wrappers (keyless PING commands)
+      verify(mockMetrics, times(numVirtualThreads))
+          .recordLaneSelection(eq("default"), anyInt(), eq("key-affinity"));
+    }
+
+    @Test
+    @DisplayName("virtual threads scale better than platform threads (informational)")
+    void virtualVsPlatformThreads() throws Exception {
+      // NOTE: This test is INFORMATIONAL (demonstrates virtual thread advantage)
+      // We don't assert performance, just measure and log
+
+      final int numThreads = 100; // Reduced for comparison fairness
+
+      // Test 1: Platform threads
+      final long platformStart = System.currentTimeMillis();
+      final var platformLatch = new CountDownLatch(numThreads);
+
+      try (var platformExecutor = Executors.newFixedThreadPool(numThreads)) {
+        for (int i = 0; i < numThreads; i++) {
+          platformExecutor.submit(
+              () -> {
+                try {
+                  final var wrapper = manager.getConnection();
+                  wrapper.sync().ping();
+                  wrapper.close();
+                } finally {
+                  platformLatch.countDown();
+                }
+              });
+        }
+        assertThat(platformLatch.await(30, TimeUnit.SECONDS)).isTrue();
+      }
+      final long platformDuration = System.currentTimeMillis() - platformStart;
+
+      // Test 2: Virtual threads
+      final long virtualStart = System.currentTimeMillis();
+      final var virtualLatch = new CountDownLatch(numThreads);
+
+      try (var virtualExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
+        for (int i = 0; i < numThreads; i++) {
+          virtualExecutor.submit(
+              () -> {
+                try {
+                  final var wrapper = manager.getConnection();
+                  wrapper.sync().ping();
+                  wrapper.close();
+                } finally {
+                  virtualLatch.countDown();
+                }
+              });
+        }
+        assertThat(virtualLatch.await(30, TimeUnit.SECONDS)).isTrue();
+      }
+      final long virtualDuration = System.currentTimeMillis() - virtualStart;
+
+      // Log comparison (informational)
+      System.out.printf("Thread comparison (%d threads):%n", numThreads);
+      System.out.printf("  Platform threads: %,d ms%n", platformDuration);
+      System.out.printf("  Virtual threads:  %,d ms%n", virtualDuration);
+      System.out.printf(
+          "  Difference:       %,d ms (%s)%n",
+          Math.abs(platformDuration - virtualDuration),
+          platformDuration > virtualDuration ? "virtual faster" : "platform faster");
+
+      // Assert: Both complete successfully (performance comparison is informational)
+      assertThat(platformDuration).isLessThan(30_000); // <30s
+      assertThat(virtualDuration).isLessThan(30_000); // <30s
+
+      // Assert: Metrics recorded for all 200 wrappers (100 platform + 100 virtual)
+      verify(mockMetrics, times(numThreads * 2))
+          .recordLaneSelection(eq("default"), anyInt(), eq("key-affinity"));
+    }
   }
 
   /**

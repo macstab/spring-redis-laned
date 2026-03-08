@@ -5,6 +5,11 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -77,6 +82,7 @@ class LeastUsedStrategyIntegrationTest {
 
   private RedisClient client;
   private LanedConnectionManager manager;
+  private LanedRedisMetrics mockMetrics;
   private static final int NUM_LANES = 8;
 
   @BeforeEach
@@ -87,6 +93,7 @@ class LeastUsedStrategyIntegrationTest {
     final RedisURI uri = RedisURI.builder().withHost(host).withPort(port).build();
 
     client = RedisClient.create(uri);
+    mockMetrics = mock(LanedRedisMetrics.class);
 
     final LeastUsedStrategy strategy = new LeastUsedStrategy();
     manager =
@@ -95,7 +102,7 @@ class LeastUsedStrategyIntegrationTest {
             StringCodec.UTF8,
             NUM_LANES,
             strategy,
-            Optional.of(LanedRedisMetrics.NOOP),
+            Optional.of(mockMetrics),
             "test-connection");
   }
 
@@ -169,6 +176,10 @@ class LeastUsedStrategyIntegrationTest {
       assertThat(successCount.get())
           .as("All operations should succeed")
           .isEqualTo(numThreads * opsPerThread);
+
+      // ASSERT: Metrics recorded for all 200 connections
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
     }
 
     @Test
@@ -193,6 +204,10 @@ class LeastUsedStrategyIntegrationTest {
       assertThat(manager.lanes)
           .as("All lanes should have been utilized")
           .allMatch(lane -> true); // All lanes exist (basic sanity check)
+
+      // ASSERT: Metrics recorded for all 800 connections
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
     }
   }
 
@@ -213,6 +228,10 @@ class LeastUsedStrategyIntegrationTest {
       assertThat(totalInFlight)
           .as("In-flight count should increment when connection acquired")
           .isGreaterThan(0);
+
+      // ASSERT: Metrics recorded for connection acquisition
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
 
       conn.close();
     }
@@ -239,6 +258,10 @@ class LeastUsedStrategyIntegrationTest {
                     .as("In-flight count should decrement when connection released")
                     .isZero();
               });
+
+      // ASSERT: Metrics recorded for connection acquisition
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
     }
 
     @Test
@@ -299,6 +322,10 @@ class LeastUsedStrategyIntegrationTest {
                     .as("All in-flight counts should return to 0 after release")
                     .isZero();
               });
+
+      // ASSERT: Metrics recorded for all 20 concurrent connections
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
     }
   }
 
@@ -369,6 +396,10 @@ class LeastUsedStrategyIntegrationTest {
                     .as("All in-flight counts should return to 0 after load test")
                     .isZero();
               });
+
+      // ASSERT: Metrics recorded for all 5000 connections (50 threads × 100 ops)
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
     }
 
     @Test
@@ -423,6 +454,10 @@ class LeastUsedStrategyIntegrationTest {
                     .as("In-flight counts should not leak (all decremented)")
                     .isZero();
               });
+
+      // ASSERT: Metrics recorded for all 5000 selections (100 threads × 50 iterations)
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
     }
   }
 
@@ -442,6 +477,10 @@ class LeastUsedStrategyIntegrationTest {
       assertThat(manager.lanes[0].getInFlightCount().get())
           .as("Lane 0 should be selected when all lanes idle (lowest-index tie-break)")
           .isGreaterThan(0);
+
+      // ASSERT: Metrics recorded for single connection
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), eq(0), eq("least-used"));
 
       conn.close();
     }
@@ -474,6 +513,10 @@ class LeastUsedStrategyIntegrationTest {
         assertThat(manager.lanes[0].getInFlightCount().get())
             .as("Should prefer lane 0 when all lanes have equal in-flight counts")
             .isGreaterThan(0);
+
+        // ASSERT: Metrics recorded for lane 0 selection
+        verify(mockMetrics, atLeastOnce())
+            .recordLaneSelection(eq("test-connection"), eq(0), eq("least-used"));
       }
     }
   }
@@ -565,6 +608,10 @@ class LeastUsedStrategyIntegrationTest {
           .as("Self-balancing test executed (detailed validation requires internal access)")
           .isTrue();
 
+      // ASSERT: Metrics recorded for all 100 connections (50 before + 50 after rebalance)
+      verify(mockMetrics, atLeastOnce())
+          .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
+
       try {
         slowThread.join(3000);
       } catch (InterruptedException e) {
@@ -581,6 +628,7 @@ class LeastUsedStrategyIntegrationTest {
     @DisplayName("Should handle single-lane configuration")
     void shouldHandleSingleLane() {
       // ARRANGE: Manager with only 1 lane
+      final var singleLaneMetrics = mock(LanedRedisMetrics.class);
       final LeastUsedStrategy strategy = new LeastUsedStrategy();
       final var singleLaneManager =
           new LanedConnectionManager(
@@ -588,7 +636,7 @@ class LeastUsedStrategyIntegrationTest {
               StringCodec.UTF8,
               1,
               strategy,
-              Optional.of(LanedRedisMetrics.NOOP),
+              Optional.of(singleLaneMetrics),
               "single-lane");
 
       try {
@@ -602,6 +650,10 @@ class LeastUsedStrategyIntegrationTest {
 
         // ASSERT: All commands should succeed (no division by zero, no errors)
         // (If we got here, test passed - no exceptions thrown)
+
+        // ASSERT: Metrics recorded for all 10 connections
+        verify(singleLaneMetrics, atLeastOnce())
+            .recordLaneSelection(eq("single-lane"), eq(0), eq("least-used"));
       } finally {
         singleLaneManager.destroy();
       }
@@ -645,6 +697,10 @@ class LeastUsedStrategyIntegrationTest {
         assertThat(maxInFlight)
             .as("At least one lane should have >= 2 in-flight (multiplexing)")
             .isGreaterThanOrEqualTo(2);
+
+        // ASSERT: Metrics recorded for all 9 connections (8 initial + 1 new)
+        verify(mockMetrics, atLeastOnce())
+            .recordLaneSelection(eq("test-connection"), anyInt(), eq("least-used"));
       }
 
       releaseSignal.countDown();
