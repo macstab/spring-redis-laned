@@ -196,12 +196,18 @@ subprojects {
         
         repositories {
             // GitHub Packages (for CI and manual SNAPSHOT publishing)
-            maven {
-                name = "GitHubPackages"
-                url = uri("https://maven.pkg.github.com/macstab/spring-redis-laned")
-                credentials {
-                    username = System.getenv("GITHUB_ACTOR") ?: project.findProperty("gpr.user") as String?
-                    password = System.getenv("GITHUB_TOKEN") ?: project.findProperty("gpr.token") as String?
+            // Only register if credentials exist (local dev doesn't need this)
+            val ghActor = System.getenv("GITHUB_ACTOR") ?: project.findProperty("gpr.user") as String?
+            val ghToken = System.getenv("GITHUB_TOKEN") ?: project.findProperty("gpr.token") as String?
+            
+            if (ghActor != null && ghToken != null) {
+                maven {
+                    name = "GitHubPackages"
+                    url = uri("https://maven.pkg.github.com/macstab/spring-redis-laned")
+                    credentials {
+                        username = ghActor
+                        password = ghToken
+                    }
                 }
             }
             
@@ -212,8 +218,8 @@ subprojects {
             if (ossrhUsername != null && ossrhPassword != null) {
                 maven {
                     name = "OSSRH"
-                    val releasesRepoUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
-                    val snapshotsRepoUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
+                    val releasesRepoUrl = uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
+                    val snapshotsRepoUrl = uri("https://central.sonatype.com/repository/maven-snapshots/")
                     url = if (version.toString().endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl
                     credentials {
                         username = ossrhUsername
